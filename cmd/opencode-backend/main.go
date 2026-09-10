@@ -13,6 +13,7 @@ import (
 	"github.com/hiylo/opencode-backend/internal/auth"
 	"github.com/hiylo/opencode-backend/internal/automation"
 	"github.com/hiylo/opencode-backend/internal/config"
+	"github.com/hiylo/opencode-backend/internal/llm"
 	"github.com/hiylo/opencode-backend/internal/opencode"
 	"github.com/hiylo/opencode-backend/internal/push"
 	"github.com/hiylo/opencode-backend/internal/server"
@@ -78,9 +79,20 @@ func main() {
 	srv := server.New(cfg, st, am, oc, hub)
 	srv.SetWebUI(webui.New())
 
+	// Optional orchestration LLM: powers natural-language rule generation and
+	// (later) result summaries and failure self-healing. Configuration is
+	// loaded from persisted settings (web-configurable) with flag/env fallback.
+	llmURL, llmKey, llmModel := loadLLMConfig(ctx, st, cfg)
+	llmClient := llm.New(llmURL, llmKey, llmModel)
+	if llmClient.Enabled() {
+		log.Printf("orchestration LLM enabled: %s (%s)", llmURL, llmModel)
+	}
+	srv.SetLLM(llmClient)
+
 	// Async orchestration worker: claims queued tasks and drives the
 	// upstream OpenCode server. Runs for the lifetime of the process.
 	exec := tasks.NewExecutor(st, hub, cfg.OpenCodeURL)
+	exec.WithLLM(llmClient)
 	go exec.Run(ctx)
 
 	// Automation engine: evaluates cron rules and handles webhook triggers.
@@ -144,6 +156,34 @@ func main() {
 		log.Fatalf("server: %v", err)
 	}
 	log.Println("opencode-backend stopped")
+}
+
+// loadLLMConfig resolves the orchestration LLM settings. Persisted settings
+// (set via the web UI) take precedence; on first run the flag/env values are
+// persisted as the initial settings.
+func loadLLMConfig(ctx context.Context, st store.Store, cfg *config.Config) (string, string, string) {
+	url, err := st.GetSetting(ctx, "llm.url")
+	if err != nil || url == "" {
+		url = cfg.LLMURL
+		if url != "" {
+			_ = st.SetSetting(ctx, "llm.url", url)
+		}
+	}
+	key, err := st.GetSetting(ctx, "llm.key")
+	if err != nil || key == "" {
+		key = cfg.LLMKey
+		if key != "" {
+			_ = st.SetSetting(ctx, "llm.key", key)
+		}
+	}
+	model, err := st.GetSetting(ctx, "llm.model")
+	if err != nil || model == "" {
+		model = cfg.LLMModel
+		if model != "" {
+			_ = st.SetSetting(ctx, "llm.model", model)
+		}
+	}
+	return url, key, model
 }
 
 // runHealthCheck verifies database and upstream connectivity without starting

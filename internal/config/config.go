@@ -24,6 +24,13 @@ type Config struct {
 	DefaultAdminPassword string
 	// WebhookSecret optionally protects /api/webhook (shared secret). Empty = off.
 	WebhookSecret string
+	// LLMURL is the OpenAI-compatible base URL (e.g. a LiteLLM gateway).
+	// Empty disables all smart-orchestration features.
+	LLMURL string
+	// LLMKey is the API key for LLMURL.
+	LLMKey string
+	// LLMModel is the model name to use for orchestration decisions.
+	LLMModel string
 	// ShowVersion prints the version and exits when true.
 	ShowVersion bool
 	// HealthCheck runs connectivity checks and exits when true.
@@ -45,6 +52,9 @@ func Parse(args []string) (*Config, error) {
 	postgresDSN := fs.String("pg-dsn", os.Getenv("OCB_PG_DSN"), "PostgreSQL connection string")
 	defaultAdmin := fs.String("default-admin-password", envOr("OCB_ADMIN_PASSWORD", "admin"), "default web admin password (used only on first initialization)")
 	webhookSecret := fs.String("webhook-secret", os.Getenv("OCB_WEBHOOK_SECRET"), "optional shared secret protecting /api/webhook (empty = off)")
+	llmURL := fs.String("llm-url", envOr("OCB_LLM_URL", ""), "OpenAI-compatible base URL for orchestration LLM (empty = disabled)")
+	llmKey := fs.String("llm-key", os.Getenv("OCB_LLM_KEY"), "API key for --llm-url")
+	llmModel := fs.String("llm-model", envOr("OCB_LLM_MODEL", ""), "model name for orchestration decisions")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	healthCheck := fs.Bool("health-check", false, "run connectivity checks and exit")
 
@@ -68,6 +78,9 @@ func Parse(args []string) (*Config, error) {
 		PostgresDSN:          *postgresDSN,
 		DefaultAdminPassword: *defaultAdmin,
 		WebhookSecret:        *webhookSecret,
+		LLMURL:               strings.TrimRight(*llmURL, "/"),
+		LLMKey:               *llmKey,
+		LLMModel:             *llmModel,
 		ShowVersion:          *showVersion,
 		HealthCheck:          *healthCheck,
 	}, nil

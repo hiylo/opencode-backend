@@ -16,6 +16,7 @@ import (
 	"github.com/hiylo/opencode-backend/internal/auth"
 	"github.com/hiylo/opencode-backend/internal/automation"
 	"github.com/hiylo/opencode-backend/internal/config"
+	"github.com/hiylo/opencode-backend/internal/llm"
 	"github.com/hiylo/opencode-backend/internal/opencode"
 	"github.com/hiylo/opencode-backend/internal/push"
 	"github.com/hiylo/opencode-backend/internal/store"
@@ -29,6 +30,7 @@ type Server struct {
 	openCode    *opencode.Client
 	hub         *push.Hub
 	automation  *automation.Engine
+	llm         *llm.Client
 	httpServer  *http.Server
 	hasWebUI    bool
 	webUIFS     webUIFSProvider
@@ -49,6 +51,10 @@ func New(cfg *config.Config, st store.Store, am *auth.Manager, oc *opencode.Clie
 // SetAutomation wires the automation engine used by rule webhooks.
 func (s *Server) SetAutomation(eng *automation.Engine) { s.automation = eng }
 
+// SetLLM wires the optional orchestration LLM client. When nil the smart
+// orchestration endpoints report they are unavailable.
+func (s *Server) SetLLM(c *llm.Client) { s.llm = c }
+
 // Routes registers all handlers on mux and starts background goroutines.
 func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", s.handleHealth)
@@ -66,6 +72,8 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/batch", s.handleBatch)
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/rules/", s.handleRuleByID)
+	mux.HandleFunc("/api/rules/generate", s.handleRuleGenerate)
+	mux.HandleFunc("/api/llm", s.handleLLMConfig)
 	mux.HandleFunc("/api/audit", s.handleAudit)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/archives", s.handleArchives)

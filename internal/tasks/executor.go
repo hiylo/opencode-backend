@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hiylo/opencode-backend/internal/llm"
 	"github.com/hiylo/opencode-backend/internal/push"
 	"github.com/hiylo/opencode-backend/internal/store"
 )
@@ -23,7 +24,8 @@ type Executor struct {
 	hub          *push.Hub
 	openCodeBase string // base URL of the OpenCode HTTP server
 	httpClient   *http.Client
-	maxRetries   int // additional attempts after the first failure
+	llm          *llm.Client // optional orchestration LLM for summaries/self-healing
+	maxRetries   int         // additional attempts after the first failure
 }
 
 // NewExecutor wires an executor. openCodeBase is required; the executor only
@@ -45,6 +47,13 @@ func (e *Executor) WithMaxRetries(n int) *Executor {
 		n = 0
 	}
 	e.maxRetries = n
+	return e
+}
+
+// WithLLM wires the optional orchestration LLM used for result summaries and
+// failure self-healing decisions. Returns the receiver for chaining.
+func (e *Executor) WithLLM(c *llm.Client) *Executor {
+	e.llm = c
 	return e
 }
 
@@ -97,8 +106,27 @@ func (e *Executor) execute(ctx context.Context, t *store.Task) {
 
 	failWithRetry := func(errMsg string) {
 		if t.Attempts > e.maxRetries {
+			// Deterministic retries exhausted. Consult the LLM once for a
+			// final self-healing decision: grant a single extra retry if the
+			// failure looks transient, otherwise escalate to permanent fail.
+			if !strings.Contains(t.Progress, "llm-retry") && e.llm != nil && e.llm.Enabled() {
+				c, cancel := context.WithTimeout(ctx, 30*time.Second)
+				d, err := e.decideFailure(c, t.Prompt, errMsg)
+				cancel()
+				if err == nil && d.Action == "retry" {
+					_ = e.store.RetryTask(ctx, t.ID, 60)
+					_ = e.store.UpdateTaskProgress(ctx, t.ID, "llm-retry: "+d.Reason)
+					pushTask("retrying", t)
+					log.Printf("tasks: %s LLM decided to retry after max attempts: %s", t.ID, d.Reason)
+					return
+				}
+				if err == nil && d.Reason != "" {
+					errMsg = errMsg + " | " + d.Reason
+				}
+			}
 			_ = e.store.FailTask(ctx, t.ID, errMsg)
 			pushTask("failed", t)
+			e.pushFailureAnalysis(ctx, t, errMsg)
 			return
 		}
 		// Re-queue for another attempt with exponential backoff.
@@ -155,6 +183,7 @@ func (e *Executor) execute(ctx context.Context, t *store.Task) {
 
 	_ = e.store.CompleteTask(ctx, t.ID, result)
 	pushTask("succeeded", t)
+	e.pushSummary(ctx, t, result)
 }
 
 var errCanceled = errors.New("task canceled")
@@ -322,6 +351,88 @@ func mustJSON(v any) json.RawMessage {
 	}
 	return b
 }
+
+// failureDecision is the LLM's self-healing verdict for a failed task.
+type failureDecision struct {
+	Action string `json:"action"` // "retry" or "escalate"
+	Reason string `json:"reason"`
+}
+
+// summarySystem instructs the model to condense a task result to one line.
+const summarySystem = `你是任务执行结果摘要助手。用一句话（不超过50字）中文概括任务执行结果的关键信息，直接输出摘要本身，不要任何解释。`
+
+// failureDecisionSystem instructs the model to classify a failure.
+const failureDecisionSystem = `你是任务失败决策助手。根据失败信息判断该重试还是升级告警。
+
+只输出一个 JSON 对象：{"action":"retry"或"escalate","reason":"简要中文原因"}
+- retry：错误是暂时性的（网络超时、暂时不可用、可重试的偶发故障），值得再试一次
+- escalate：错误是确定性的（代码缺陷、配置错误、权限不足、输入错误），重试无意义，应立即告警`
+
+// analyzeFailureSystem instructs the model to produce a root-cause summary.
+const analyzeFailureSystem = `你是任务失败根因分析助手。用不超过80字中文说明失败的最可能原因和建议的下一步，直接输出分析文本，不要任何解释。`
+
+// pushSummary asynchronously asks the LLM for a one-line result summary and
+// broadcasts it as a task.summary event. No-op when the LLM is unavailable.
+func (e *Executor) pushSummary(ctx context.Context, t *store.Task, result string) {
+	if e.llm == nil || !e.llm.Enabled() {
+		return
+	}
+	go func() {
+		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		summary, err := e.llm.Complete(c, summarySystem, "任务指令："+t.Prompt+"\n\n执行结果：\n"+truncateStr(result, 4000))
+		if err != nil {
+			log.Printf("tasks: summarize %s: %v", t.ID, err)
+			return
+		}
+		_ = e.store.SetTaskAISummary(c, t.ID, summary)
+		e.hub.Broadcast(push.Message{
+			Type:     "task.summary",
+			Payload:  mustJSON(map[string]any{"id": t.ID, "summary": summary}),
+			Severity: push.Info,
+		})
+	}()
+}
+
+// pushFailureAnalysis asynchronously asks the LLM for a root-cause analysis
+// and broadcasts it as a critical task.failure event. No-op without an LLM.
+func (e *Executor) pushFailureAnalysis(ctx context.Context, t *store.Task, errMsg string) {
+	if e.llm == nil || !e.llm.Enabled() {
+		return
+	}
+	go func() {
+		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		analysis, err := e.llm.Complete(c, analyzeFailureSystem, "任务指令："+t.Prompt+"\n\n失败信息："+truncateStr(errMsg, 4000))
+		if err != nil {
+			log.Printf("tasks: analyze failure %s: %v", t.ID, err)
+			return
+		}
+		_ = e.store.SetTaskAISummary(c, t.ID, analysis)
+		e.hub.Broadcast(push.Message{
+			Type:     "task.failure",
+			Payload:  mustJSON(map[string]any{"id": t.ID, "analysis": analysis}),
+			Severity: push.Critical,
+		})
+	}()
+}
+
+// decideFailure asks the LLM whether a failed task should be retried or
+// escalated, returning the structured decision.
+func (e *Executor) decideFailure(ctx context.Context, prompt, errMsg string) (failureDecision, error) {
+	var d failureDecision
+	err := e.llm.CompleteJSON(ctx, failureDecisionSystem,
+		"任务指令："+prompt+"\n\n失败信息："+truncateStr(errMsg, 4000), &d)
+	return d, err
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
 // severityFor maps a task status to a push severity for notification routing.
 func severityFor(status string) string {
 	switch status {

@@ -26,6 +26,7 @@ type Task struct {
 	Error       string     `json:"error"`
 	Result      string     `json:"result"`
 	Progress    string     `json:"progress"`
+	AISummary   string     `json:"aiSummary"` // LLM result summary (success) or root-cause analysis (failure)
 	Attempts    int        `json:"attempts"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	UpdatedAt   time.Time  `json:"updatedAt"`
@@ -46,7 +47,7 @@ func (s *sqlStore) CreateTask(ctx context.Context, t *Task) error {
 
 // ListTasks returns tasks ordered newest first, with an optional status filter.
 func (s *sqlStore) ListTasks(ctx context.Context, status string, limit int) ([]*Task, error) {
-	query := `SELECT id, session_id, directory, prompt, status, error, result, progress, attempts, created_at, updated_at, started_at, finished_at, available_at FROM tasks`
+	query := `SELECT id, session_id, directory, prompt, status, error, result, progress, ai_summary, attempts, created_at, updated_at, started_at, finished_at, available_at FROM tasks`
 	args := []any{}
 	if status != "" {
 		query += ` WHERE status = ?`
@@ -68,7 +69,7 @@ func (s *sqlStore) ListTasks(ctx context.Context, status string, limit int) ([]*
 // GetTask loads a single task.
 func (s *sqlStore) GetTask(ctx context.Context, id string) (*Task, error) {
 	row := s.db.QueryRowContext(ctx, s.q(`
-		SELECT id, session_id, directory, prompt, status, error, result, progress, attempts, created_at, updated_at, started_at, finished_at, available_at
+		SELECT id, session_id, directory, prompt, status, error, result, progress, ai_summary, attempts, created_at, updated_at, started_at, finished_at, available_at
 		FROM tasks WHERE id = ?`), id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -86,7 +87,7 @@ func (s *sqlStore) ClaimNextTask(ctx context.Context) (*Task, error) {
 		WHERE id = (
 			SELECT id FROM tasks WHERE status = ? AND available_at <= CURRENT_TIMESTAMP ORDER BY created_at ASC LIMIT 1
 		)
-		RETURNING id, session_id, directory, prompt, status, error, result, progress, attempts, created_at, updated_at, started_at, finished_at, available_at`),
+		RETURNING id, session_id, directory, prompt, status, error, result, progress, ai_summary, attempts, created_at, updated_at, started_at, finished_at, available_at`),
 		TaskRunning, TaskQueued)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -114,6 +115,14 @@ func (s *sqlStore) CompleteTask(ctx context.Context, id, result string) error {
 	_, err := s.db.ExecContext(ctx, s.q(`
 		UPDATE tasks SET status = ?, result = ?, finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`), TaskSucceeded, result, id)
+	return err
+}
+
+// SetTaskAISummary records the LLM-generated summary or failure analysis for a
+// task. It is advisory metadata and never changes the task status.
+func (s *sqlStore) SetTaskAISummary(ctx context.Context, id, summary string) error {
+	_, err := s.db.ExecContext(ctx, s.q(`
+		UPDATE tasks SET ai_summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), summary, id)
 	return err
 }
 
@@ -201,7 +210,7 @@ func scanTask(row rowScanner) (*Task, error) {
 	t := &Task{}
 	var started, finished *time.Time
 	err := row.Scan(&t.ID, &t.SessionID, &t.Directory, &t.Prompt, &t.Status,
-		&t.Error, &t.Result, &t.Progress, &t.Attempts, &t.CreatedAt, &t.UpdatedAt, &started, &finished, &t.AvailableAt)
+		&t.Error, &t.Result, &t.Progress, &t.AISummary, &t.Attempts, &t.CreatedAt, &t.UpdatedAt, &started, &finished, &t.AvailableAt)
 	if err != nil {
 		return nil, err
 	}

@@ -63,6 +63,17 @@ var migrations = []migration{
 	{name: "archives", apply: migrationArchives},
 	{name: "web_sessions", apply: migrationWebSessions},
 	{name: "rule_executions", apply: migrationRuleExecutions},
+	{name: "tasks_ai_summary", apply: migrationTasksAISummary},
+}
+
+// migrationTasksAISummary adds the ai_summary column holding the LLM-generated
+// result summary (success) or root-cause analysis (failure) for a task.
+func migrationTasksAISummary(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		ALTER TABLE tasks ADD COLUMN ai_summary TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // migrationRuleExecutions adds the rule execution history table.

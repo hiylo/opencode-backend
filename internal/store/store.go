@@ -68,6 +68,8 @@ type Store interface {
 	SetTaskSession(ctx context.Context, id, sessionID string) error
 	// CompleteTask marks a task succeeded with a result.
 	CompleteTask(ctx context.Context, id, result string) error
+	// SetTaskAISummary records the LLM-generated summary or failure analysis.
+	SetTaskAISummary(ctx context.Context, id, summary string) error
 	// FailTask marks a task failed.
 	FailTask(ctx context.Context, id, errMsg string) error
 	// RetryTask re-queues a failed task for another attempt after backoffSecs,
