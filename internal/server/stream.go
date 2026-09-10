@@ -20,7 +20,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if _, ok := s.requireToken(r); !ok {
+	if _, ok := s.tokenFromRequest(r); !ok {
 		writeErr(w, http.StatusUnauthorized, "invalid token")
 		return
 	}
