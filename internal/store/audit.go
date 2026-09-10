@@ -59,4 +59,14 @@ func (s *sqlStore) ListAudit(ctx context.Context, tokenID string, limit int) ([]
 // RecordAuditFn is a lightweight hook signature for middleware.
 type RecordAuditFn func(ctx context.Context, tokenID, tokenName, method, path string, status int)
 
+// DeleteAuditOlderThan purges audit entries older than cutoff.
+func (s *sqlStore) DeleteAuditOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
+	res, err := s.db.ExecContext(ctx, s.q(`DELETE FROM audit_log WHERE created_at <= ?`), cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 var _ = sql.ErrNoRows // keep import if refactored

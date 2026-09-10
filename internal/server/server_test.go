@@ -724,3 +724,35 @@ func TestStreamRelaysEvents(t *testing.T) {
 		t.Fatalf("missing connected preamble: %q", body)
 	}
 }
+
+func TestWebhookSecretProtection(t *testing.T) {
+	s := newTestServer(t)
+	s.cfg.WebhookSecret = "topsecret"
+
+	// Login + create http rule.
+	rec := s.do(t, http.MethodPost, "/api/web/session", `{"password":"admin"}`, nil)
+	var login struct {
+		Session string `json:"session"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &login)
+	wh := map[string]string{"X-Web-Session": login.Session}
+	s.do(t, http.MethodPost, "/api/rules", `{"name":"hook","kind":"http","schedule":"/x","prompt":"p","enabled":true}`, wh)
+
+	// Without secret -> 401.
+	rec = s.do(t, http.MethodPost, "/api/webhook?target=/x", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without secret, got %d", rec.Code)
+	}
+
+	// Wrong secret -> 401.
+	rec = s.do(t, http.MethodPost, "/api/webhook?target=/x", "", map[string]string{"X-Webhook-Secret": "wrong"})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with wrong secret, got %d", rec.Code)
+	}
+
+	// Correct secret -> fired.
+	rec = s.do(t, http.MethodPost, "/api/webhook?target=/x", "", map[string]string{"X-Webhook-Secret": "topsecret"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with correct secret, got %d: %s", rec.Code, rec.Body.String())
+	}
+}

@@ -76,6 +76,11 @@ type Store interface {
 	RetryTask(ctx context.Context, id string, backoffSecs int) error
 	// CancelTask marks a queued/running task canceled. Returns true if changed.
 	CancelTask(ctx context.Context, id string) (bool, error)
+	// IsTaskCanceled reports whether a task is currently in canceled state.
+	IsTaskCanceled(ctx context.Context, id string) (bool, error)
+	// RecoverStaleRunning resets tasks left in running state (e.g. after a
+	// process restart) back to queued so the executor picks them up again.
+	RecoverStaleRunning(ctx context.Context) (int, error)
 
 	// ---- Automation rules ----
 
@@ -96,6 +101,8 @@ type Store interface {
 	RecordAudit(ctx context.Context, e *AuditEntry) error
 	// ListAudit returns recent audit entries, newest first.
 	ListAudit(ctx context.Context, tokenID string, limit int) ([]*AuditEntry, error)
+	// DeleteAuditOlderThan purges audit entries older than the given cutoff.
+	DeleteAuditOlderThan(ctx context.Context, cutoff time.Time) (int, error)
 
 	// ---- Session archives ----
 

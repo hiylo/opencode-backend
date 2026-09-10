@@ -3,12 +3,21 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
 	"time"
 
 	"github.com/hiylo/opencode-backend/internal/store"
 )
+
+// secureCompare compares two strings in constant time.
+func secureCompare(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
 
 // handleRules implements rules CRUD. GET/POST require web session (admin),
 // since automation rules configure backend behaviour.
@@ -101,12 +110,22 @@ func (s *Server) handleRuleByID(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRuleWebhook fires a matching http-kind rule. It accepts an optional
-// ?target= path filter and an optional ?token= for loose protection; the
-// handler itself is authenticated by the caller (e.g. a git webhook secret).
+// ?target= path filter. If a webhook secret is configured, the request must
+// carry it in X-Webhook-Secret (or ?secret=).
 func (s *Server) handleRuleWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
+	}
+	if s.cfg.WebhookSecret != "" {
+		provided := r.Header.Get("X-Webhook-Secret")
+		if provided == "" {
+			provided = r.URL.Query().Get("secret")
+		}
+		if !secureCompare(provided, s.cfg.WebhookSecret) {
+			writeErr(w, http.StatusUnauthorized, "invalid webhook secret")
+			return
+		}
 	}
 	target := r.URL.Query().Get("target")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)

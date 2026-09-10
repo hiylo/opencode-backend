@@ -51,6 +51,13 @@ func (e *Executor) WithMaxRetries(n int) *Executor {
 // Run is the worker loop: claim one queued task, execute it, repeat.
 // It returns when ctx is canceled.
 func (e *Executor) Run(ctx context.Context) {
+	// Recover tasks left "running" by a previous crash/restart.
+	if n, err := e.store.RecoverStaleRunning(ctx); err != nil {
+		log.Printf("tasks: recover stale running: %v", err)
+	} else if n > 0 {
+		log.Printf("tasks: recovered %d stale running tasks back to queued", n)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -110,9 +117,19 @@ func (e *Executor) execute(ctx context.Context, t *store.Task) {
 
 	pushTask("running", t)
 
+	// canceled reports whether this task was canceled mid-execution.
+	canceled := func() bool {
+		c, err := e.store.IsTaskCanceled(ctx, t.ID)
+		return err == nil && c
+	}
+
 	// Step 1: ensure a session exists to run the prompt in.
 	sessionID := t.SessionID
 	if sessionID == "" {
+		if canceled() {
+			pushTask("canceled", t)
+			return
+		}
 		created, err := e.createSession(ctx, t.Directory)
 		if err != nil {
 			failWithRetry("create session: " + err.Error())
@@ -124,10 +141,14 @@ func (e *Executor) execute(ctx context.Context, t *store.Task) {
 	}
 
 	// Step 2: prompt the session and drain the response.
-	result, err := e.promptSession(ctx, sessionID, t.Prompt, t.Directory, func(partial string) {
+	result, err := e.promptSession(ctx, sessionID, t.Prompt, t.Directory, canceled, func(partial string) {
 		_ = e.store.UpdateTaskProgress(ctx, t.ID, partial)
 	})
 	if err != nil {
+		if errors.Is(err, errCanceled) {
+			pushTask("canceled", t)
+			return
+		}
 		failWithRetry(err.Error())
 		return
 	}
@@ -135,6 +156,8 @@ func (e *Executor) execute(ctx context.Context, t *store.Task) {
 	_ = e.store.CompleteTask(ctx, t.ID, result)
 	pushTask("succeeded", t)
 }
+
+var errCanceled = errors.New("task canceled")
 
 // createSession creates a new OpenCode session via the HTTP API.
 func (e *Executor) createSession(ctx context.Context, directory string) (string, error) {
@@ -168,7 +191,8 @@ func (e *Executor) createSession(ctx context.Context, directory string) (string,
 // promptSession submits a prompt using the V2 admitted-prompt API
 // (POST /session/{id}/prompt), then waits for the session to become idle
 // and returns the latest assistant text. Progress callbacks report phases.
-func (e *Executor) promptSession(ctx context.Context, sessionID, prompt, directory string, onProgress func(string)) (string, error) {
+// canceled is polled so a client cancellation aborts the wait promptly.
+func (e *Executor) promptSession(ctx context.Context, sessionID, prompt, directory string, canceled func() bool, onProgress func(string)) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"id":       "msg_ocb" + time.Now().Format("20060102150405"),
 		"prompt":   map[string]any{"text": prompt},
@@ -204,6 +228,9 @@ func (e *Executor) promptSession(ctx context.Context, sessionID, prompt, directo
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
 			return "", err
+		}
+		if canceled != nil && canceled() {
+			return "", errCanceled
 		}
 		time.Sleep(3 * time.Second)
 		busy, err := e.isSessionBusy(ctx, sessionID)

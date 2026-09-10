@@ -89,6 +89,29 @@ func main() {
 	srv.SetAutomation(eng)
 	go eng.Run(ctx)
 
+	// Housekeeping: purge audit logs and expired web sessions periodically.
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if n, err := st.DeleteAuditOlderThan(ctx, time.Now().Add(-30*24*time.Hour)); err != nil {
+					log.Printf("housekeeping: audit cleanup: %v", err)
+				} else if n > 0 {
+					log.Printf("housekeeping: purged %d old audit entries", n)
+				}
+				if n, err := st.DeleteExpiredWebSessions(ctx); err != nil {
+					log.Printf("housekeeping: session cleanup: %v", err)
+				} else if n > 0 {
+					log.Printf("housekeeping: purged %d expired sessions", n)
+				}
+			}
+		}
+	}()
+
 	// Orchestration: periodically report upstream health so subscribers get
 	// live status without polling from the app.
 	go func() {

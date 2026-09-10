@@ -22,6 +22,8 @@ type Config struct {
 	PostgresDSN string
 	// DefaultAdminPassword is the initial web admin password if no stored one exists.
 	DefaultAdminPassword string
+	// WebhookSecret optionally protects /api/webhook (shared secret). Empty = off.
+	WebhookSecret string
 	// ShowVersion prints the version and exits when true.
 	ShowVersion bool
 	// HealthCheck runs connectivity checks and exits when true.
@@ -42,6 +44,7 @@ func Parse(args []string) (*Config, error) {
 	sqlitePath := fs.String("sqlite-path", envOr("OCB_SQLITE_PATH", "opencode-backend.db"), "SQLite database file path")
 	postgresDSN := fs.String("pg-dsn", os.Getenv("OCB_PG_DSN"), "PostgreSQL connection string")
 	defaultAdmin := fs.String("default-admin-password", envOr("OCB_ADMIN_PASSWORD", "admin"), "default web admin password (used only on first initialization)")
+	webhookSecret := fs.String("webhook-secret", os.Getenv("OCB_WEBHOOK_SECRET"), "optional shared secret protecting /api/webhook (empty = off)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	healthCheck := fs.Bool("health-check", false, "run connectivity checks and exit")
 
@@ -64,6 +67,7 @@ func Parse(args []string) (*Config, error) {
 		SQLitePath:           *sqlitePath,
 		PostgresDSN:          *postgresDSN,
 		DefaultAdminPassword: *defaultAdmin,
+		WebhookSecret:        *webhookSecret,
 		ShowVersion:          *showVersion,
 		HealthCheck:          *healthCheck,
 	}, nil

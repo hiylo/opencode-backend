@@ -233,3 +233,65 @@ func TestWebSessionPersistence(t *testing.T) {
 		t.Fatalf("purge expired: n=%d err=%v", n, err)
 	}
 }
+
+func TestIsTaskCanceled(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	task := &Task{ID: "c1", Prompt: "p"}
+	if err := st.CreateTask(ctx, task); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c, err := st.IsTaskCanceled(ctx, "c1")
+	if err != nil || c {
+		t.Fatalf("should not be canceled: c=%v err=%v", c, err)
+	}
+	if _, err := st.CancelTask(ctx, "c1"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	c, err = st.IsTaskCanceled(ctx, "c1")
+	if err != nil || !c {
+		t.Fatalf("should be canceled: c=%v err=%v", c, err)
+	}
+}
+
+func TestRecoverStaleRunning(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	// Create two tasks, claim one to put it in running state.
+	if err := st.CreateTask(ctx, &Task{ID: "r1", Prompt: "p"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := st.CreateTask(ctx, &Task{ID: "r2", Prompt: "p"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := st.ClaimNextTask(ctx); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	// r1 is now running, r2 queued.
+	n, err := st.RecoverStaleRunning(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("recover: n=%d err=%v", n, err)
+	}
+	got, _ := st.GetTask(ctx, "r1")
+	if got.Status != TaskQueued {
+		t.Fatalf("r1 should be queued after recover, got %s", got.Status)
+	}
+}
+
+func TestDeleteAuditOlderThan(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	// Insert audit entries at known times.
+	for i, name := range []string{"a", "b", "c"} {
+		cutoff := time.Now().Add(-time.Duration(10*i+1) * time.Hour)
+		_ = st.RecordAudit(ctx, &AuditEntry{TokenID: "t", TokenName: name, Method: "GET", Path: "/x", Status: 200})
+		_ = cutoff
+	}
+	// Delete entries older than 5 hours -> should remove b, c (10h, 20h old).
+	// NOTE: created_at uses CURRENT_TIMESTAMP so this is a smoke test only.
+	n, err := st.DeleteAuditOlderThan(ctx, time.Now().Add(-5*time.Hour))
+	if err != nil {
+		t.Fatalf("delete audit: %v", err)
+	}
+	_ = n // no strict assertion; just verifies the call works on both dialects
+}

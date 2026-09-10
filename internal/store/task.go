@@ -166,6 +166,33 @@ func (s *sqlStore) CancelTask(ctx context.Context, id string) (bool, error) {
 	return n > 0, nil
 }
 
+// IsTaskCanceled reports whether a task is currently canceled.
+func (s *sqlStore) IsTaskCanceled(ctx context.Context, id string) (bool, error) {
+	var status string
+	err := s.db.QueryRowContext(ctx, s.q(`SELECT status FROM tasks WHERE id = ?`), id).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	return status == TaskCanceled, nil
+}
+
+// RecoverStaleRunning resets tasks stuck in running state back to queued.
+// Called on startup so tasks interrupted by a crash/restart are re-run.
+func (s *sqlStore) RecoverStaleRunning(ctx context.Context) (int, error) {
+	res, err := s.db.ExecContext(ctx, s.q(`
+		UPDATE tasks SET status = ?, started_at = NULL, updated_at = CURRENT_TIMESTAMP
+		WHERE status = ?`),
+		TaskQueued, TaskRunning)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
