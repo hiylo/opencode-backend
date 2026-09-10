@@ -126,8 +126,16 @@
 ### DELETE /api/rules/{id}（需 X-Web-Session）
 删除规则。→ `{"ok":true}`；404 → 不存在
 
+### GET /api/rules/{id}/executions（需 X-Web-Session）
+规则执行历史（触发时间 + 产生的任务）：
+```json
+{ "executions": [ { "id":1, "ruleId":"rule_...", "taskId":"task_...", "triggeredAt":"..." } ],
+  "total": 3 }
+```
+
 ### POST /api/webhook?target=xxx
 触发匹配的 http 规则（无需鉴权，由调用方如 git webhook 使用）。→ `{"fired":true}`；404 → 无匹配规则
+- 若配置了 `--webhook-secret`，需带 `X-Webhook-Secret: <secret>`（或 `?secret=`），否则 401
 
 ## 审计与统计（Web Session）
 

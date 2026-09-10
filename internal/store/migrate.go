@@ -62,6 +62,26 @@ var migrations = []migration{
 	{name: "audit_log", apply: migrationAuditLog},
 	{name: "archives", apply: migrationArchives},
 	{name: "web_sessions", apply: migrationWebSessions},
+	{name: "rule_executions", apply: migrationRuleExecutions},
+}
+
+// migrationRuleExecutions adds the rule execution history table.
+func migrationRuleExecutions(ctx context.Context, db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS rule_executions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			rule_id TEXT NOT NULL,
+			task_id TEXT NOT NULL DEFAULT '',
+			triggered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_rule_exec_rule_id ON rule_executions(rule_id, id)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.ExecContext(ctx, s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrationWebSessions adds the persisted web admin session table.

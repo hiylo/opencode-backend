@@ -2,6 +2,8 @@ package automation
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -162,3 +164,84 @@ func TestNextCronInvalidFields(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+func TestFireRecordsExecution(t *testing.T) {
+	ctx := context.Background()
+	eng, st := newTestEngine(t)
+	rule := &store.Rule{ID: "rule_hist", Name: "h", Kind: store.TriggerCron, Prompt: "p", Enabled: true}
+	if err := st.CreateRule(ctx, rule); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := eng.Fire(ctx, "rule_hist"); err != nil {
+		t.Fatalf("fire: %v", err)
+	}
+	execs, err := st.ListRuleExecutions(ctx, "rule_hist", 10)
+	if err != nil {
+		t.Fatalf("list exec: %v", err)
+	}
+	if len(execs) != 1 {
+		t.Fatalf("expected 1 execution, got %d", len(execs))
+	}
+	if execs[0].TaskID == "" {
+		t.Fatalf("execution missing task id")
+	}
+	cnt, err := st.CountRuleExecutions(ctx, "rule_hist")
+	if err != nil || cnt != 1 {
+		t.Fatalf("count: %d err=%v", cnt, err)
+	}
+}
+
+func TestPollGitFiresOnNewCommit(t *testing.T) {
+	ctx := context.Background()
+	eng, st := newTestEngine(t)
+
+	// Create a temp git repo with an initial commit.
+	dir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(cmd.Env, "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	runGit("init", "-q")
+	runGit("config", "user.name", "t")
+	runGit("config", "user.email", "t@t")
+	_ = os.WriteFile(filepath.Join(dir, "f.txt"), []byte("a"), 0o644)
+	runGit("add", ".")
+	runGit("commit", "-qm", "first")
+
+	rule := &store.Rule{ID: "rule_git", Name: "g", Kind: store.TriggerGit, Schedule: dir, Directory: dir, Prompt: "p", Enabled: true}
+	if err := st.CreateRule(ctx, rule); err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+
+	// First poll: baseline, no fire.
+	if err := eng.pollGit(ctx); err != nil {
+		t.Fatalf("poll 1: %v", err)
+	}
+	if n, _ := st.CountRuleExecutions(ctx, "rule_git"); n != 0 {
+		t.Fatalf("baseline should not fire, got %d execs", n)
+	}
+
+	// New commit -> fire.
+	_ = os.WriteFile(filepath.Join(dir, "f.txt"), []byte("b"), 0o644)
+	runGit("add", ".")
+	runGit("commit", "-qm", "second")
+	if err := eng.pollGit(ctx); err != nil {
+		t.Fatalf("poll 2: %v", err)
+	}
+	if n, _ := st.CountRuleExecutions(ctx, "rule_git"); n != 1 {
+		t.Fatalf("expected 1 execution after commit, got %d", n)
+	}
+
+	// No new commit -> no additional fire.
+	if err := eng.pollGit(ctx); err != nil {
+		t.Fatalf("poll 3: %v", err)
+	}
+	if n, _ := st.CountRuleExecutions(ctx, "rule_git"); n != 1 {
+		t.Fatalf("expected still 1 execution, got %d", n)
+	}
+}

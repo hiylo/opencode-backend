@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hiylo/opencode-backend/internal/store"
@@ -86,17 +87,25 @@ func (s *Server) createRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, rule)
 }
 
-// handleRuleByID deletes (DELETE) a rule by id.
+// handleRuleByID deletes (DELETE) a rule by id, or lists its executions
+// (GET /api/rules/{id}/executions).
 func (s *Server) handleRuleByID(w http.ResponseWriter, r *http.Request) {
 	if !s.requireWeb(r) {
 		writeErr(w, http.StatusUnauthorized, "web session required")
 		return
 	}
-	id := r.URL.Path[len("/api/rules/"):]
-	if id == "" {
+	rest := r.URL.Path[len("/api/rules/"):]
+	if rest == "" {
 		writeErr(w, http.StatusBadRequest, "missing rule id")
 		return
 	}
+	// Split "id" vs "id/executions".
+	if strings.HasSuffix(rest, "/executions") {
+		id := strings.TrimSuffix(rest, "/executions")
+		s.handleRuleExecutions(w, r, id)
+		return
+	}
+	id := rest
 	switch r.Method {
 	case http.MethodDelete:
 		if err := s.store.DeleteRule(r.Context(), id); err != nil {
@@ -107,6 +116,30 @@ func (s *Server) handleRuleByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleRuleExecutions returns the recent execution history of a rule.
+func (s *Server) handleRuleExecutions(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	execs, err := s.store.ListRuleExecutions(ctx, id, 50)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list executions failed")
+		return
+	}
+	count, err := s.store.CountRuleExecutions(ctx, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "count executions failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"executions": execs,
+		"total":      count,
+	})
 }
 
 // handleRuleWebhook fires a matching http-kind rule. It accepts an optional

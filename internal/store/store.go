@@ -95,6 +95,15 @@ type Store interface {
 	// MarkRuleFired records when a rule last created a task.
 	MarkRuleFired(ctx context.Context, id string) error
 
+	// ---- Rule executions ----
+
+	// RecordRuleExecution logs a rule firing with the task it produced.
+	RecordRuleExecution(ctx context.Context, ruleID, taskID string) error
+	// ListRuleExecutions returns recent executions (per rule or all).
+	ListRuleExecutions(ctx context.Context, ruleID string, limit int) ([]*RuleExecution, error)
+	// CountRuleExecutions returns total executions for a rule (or all).
+	CountRuleExecutions(ctx context.Context, ruleID string) (int, error)
+
 	// ---- Audit trail ----
 
 	// RecordAudit inserts an API access audit entry.

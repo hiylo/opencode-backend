@@ -2,7 +2,9 @@ package automation
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -10,14 +12,16 @@ import (
 )
 
 // Engine evaluates automation rules and enqueues tasks when a rule fires.
-// Cron rules are polled on a ticker; git/http rules are fired explicitly via
-// Fire() (typically from an HTTP webhook handler).
+// Cron rules are polled on a ticker; git rules watch for new commits in their
+// target repository; http rules fire via webhooks.
 type Engine struct {
 	store store.Store
 	// interval is the poll period for cron rules.
 	interval time.Duration
 	// now is a clock hook for tests.
 	now func() time.Time
+	// gitHeads caches the last seen HEAD per git rule (ruleID -> commit).
+	gitHeads map[string]string
 }
 
 // NewEngine creates an automation engine polling cron rules every interval.
@@ -25,11 +29,11 @@ func NewEngine(st store.Store, interval time.Duration) *Engine {
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
-	return &Engine{store: st, interval: interval, now: time.Now}
+	return &Engine{store: st, interval: interval, now: time.Now, gitHeads: make(map[string]string)}
 }
 
-// Run polls enabled cron rules and fires any that are due. It blocks until ctx
-// is canceled.
+// Run polls enabled cron rules and git repositories and fires any that are
+// due. It blocks until ctx is canceled.
 func (e *Engine) Run(ctx context.Context) {
 	ticker := time.NewTicker(e.interval)
 	defer ticker.Stop()
@@ -40,6 +44,9 @@ func (e *Engine) Run(ctx context.Context) {
 		case <-ticker.C:
 			if err := e.pollCron(ctx); err != nil {
 				log.Printf("automation: cron poll: %v", err)
+			}
+			if err := e.pollGit(ctx); err != nil {
+				log.Printf("automation: git poll: %v", err)
 			}
 		}
 	}
@@ -68,6 +75,56 @@ func (e *Engine) pollCron(ctx context.Context) error {
 	return nil
 }
 
+// pollGit watches git-kind rules: each rule points to a repository directory
+// (Schedule) and fires when a new commit appears (HEAD hash changes).
+func (e *Engine) pollGit(ctx context.Context) error {
+	rules, err := e.store.ListRules(ctx)
+	if err != nil {
+		return err
+	}
+	for _, r := range rules {
+		if !r.Enabled || r.Kind != store.TriggerGit {
+			continue
+		}
+		dir := r.Schedule
+		if dir == "" {
+			dir = r.Directory
+		}
+		if dir == "" {
+			continue
+		}
+		head, err := gitHead(ctx, dir)
+		if err != nil {
+			log.Printf("automation: git head %s: %v", r.ID, err)
+			continue
+		}
+		prev, seen := e.gitHeads[r.ID]
+		if !seen {
+			// First observation: record baseline without firing.
+			e.gitHeads[r.ID] = head
+			continue
+		}
+		if prev != head {
+			e.gitHeads[r.ID] = head
+			log.Printf("automation: git rule %s fired (head %s -> %s)", r.ID, prev, head)
+			if err := e.Fire(ctx, r.ID); err != nil {
+				log.Printf("automation: fire git rule %s: %v", r.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// gitHead returns the current HEAD commit of a git repository.
+func gitHead(ctx context.Context, dir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // Fire enqueues a task for the given rule (cron/git/http all use this path).
 // Returns ErrNotFound if the rule does not exist.
 func (e *Engine) Fire(ctx context.Context, ruleID string) error {
@@ -85,6 +142,10 @@ func (e *Engine) Fire(ctx context.Context, ruleID string) error {
 	}
 	if err := e.store.CreateTask(ctx, t); err != nil {
 		return err
+	}
+	if err := e.store.RecordRuleExecution(ctx, ruleID, t.ID); err != nil {
+		// Non-fatal: the task is created even if history logging fails.
+		log.Printf("automation: record execution for %s: %v", ruleID, err)
 	}
 	return e.store.MarkRuleFired(ctx, ruleID)
 }
