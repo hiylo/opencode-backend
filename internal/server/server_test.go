@@ -43,6 +43,8 @@ func newTestServer(t *testing.T) *Server {
 			_, _ = w.Write([]byte(`{"ses_a":{"type":"busy"}}`))
 		case "/config":
 			_, _ = w.Write([]byte(`{"version":"v9.9.9"}`))
+		case "/session/ses_test123/message":
+			_, _ = w.Write([]byte(`[{"role":"assistant","content":[{"type":"text","text":"这是结果"}]}]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -497,5 +499,72 @@ func TestAuditLogging(t *testing.T) {
 	rec = s.do(t, http.MethodGet, "/api/audit", "", nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 without session, got %d", rec.Code)
+	}
+}
+
+func TestArchiveSessionFlow(t *testing.T) {
+	s := newTestServer(t)
+
+	// Login + token.
+	rec := s.do(t, http.MethodPost, "/api/web/session", `{"password":"admin"}`, nil)
+	var login struct {
+		Session string `json:"session"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &login)
+	wh := map[string]string{"X-Web-Session": login.Session}
+	rec = s.do(t, http.MethodPost, "/api/tokens", `{"name":"archiver"}`, wh)
+	var tok struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &tok)
+	th := map[string]string{"Authorization": "Bearer " + tok.Token}
+
+	// Archive a session (fake upstream returns a message list).
+	rec = s.do(t, http.MethodPost, "/api/archives", `{"sessionId":"ses_test123","format":"markdown"}`, th)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("archive status %d: %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if created.ID == "" {
+		t.Fatalf("no archive id")
+	}
+
+	// List.
+	rec = s.do(t, http.MethodGet, "/api/archives", "", th)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status %d", rec.Code)
+	}
+	var list struct {
+		Archives []map[string]any `json:"archives"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &list)
+	if len(list.Archives) != 1 {
+		t.Fatalf("expected 1 archive, got %d", len(list.Archives))
+	}
+
+	// Get full content.
+	rec = s.do(t, http.MethodGet, "/api/archives/"+created.ID, "", th)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status %d", rec.Code)
+	}
+	var arch struct {
+		Content string `json:"Content"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &arch)
+	if !strings.Contains(arch.Content, "这是结果") {
+		t.Fatalf("archive content missing assistant text: %q", arch.Content)
+	}
+
+	// Delete.
+	rec = s.do(t, http.MethodDelete, "/api/archives/"+created.ID, "", th)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status %d", rec.Code)
+	}
+	rec = s.do(t, http.MethodGet, "/api/archives/"+created.ID, "", th)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d", rec.Code)
 	}
 }

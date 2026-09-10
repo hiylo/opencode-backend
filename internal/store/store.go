@@ -96,6 +96,17 @@ type Store interface {
 	RecordAudit(ctx context.Context, e *AuditEntry) error
 	// ListAudit returns recent audit entries, newest first.
 	ListAudit(ctx context.Context, tokenID string, limit int) ([]*AuditEntry, error)
+
+	// ---- Session archives ----
+
+	// CreateArchive persists an archive snapshot.
+	CreateArchive(ctx context.Context, a *Archive) error
+	// ListArchives returns archive metadata (without content), newest first.
+	ListArchives(ctx context.Context, limit int) ([]*Archive, error)
+	// GetArchive loads a full archive including content.
+	GetArchive(ctx context.Context, id string) (*Archive, error)
+	// DeleteArchive removes an archive by id.
+	DeleteArchive(ctx context.Context, id string) error
 }
 
 // Open opens a store for the given driver/dsn. It applies all migrations

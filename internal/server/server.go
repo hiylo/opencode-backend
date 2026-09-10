@@ -68,6 +68,8 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/rules/", s.handleRuleByID)
 	mux.HandleFunc("/api/audit", s.handleAudit)
+	mux.HandleFunc("/api/archives", s.handleArchives)
+	mux.HandleFunc("/api/archives/", s.handleArchiveByID)
 	mux.HandleFunc("/api/webhook", s.handleRuleWebhook)
 	mux.HandleFunc("/", s.handleIndex)
 }

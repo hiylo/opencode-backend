@@ -146,3 +146,71 @@ func (c *Client) ResolveURL(p string) string {
 	}
 	return u.String()
 }
+// Message is a single message in a session export.
+type Message struct {
+	Role    string
+	Content string
+}
+
+// FetchSessionMessages retrieves the message list of a session from
+// GET /session/{id}/message and flattens content parts to text.
+func (c *Client) FetchSessionMessages(ctx context.Context, sessionID string) ([]Message, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/session/"+sessionID+"/message", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch messages: %w", err)
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("fetch messages: %s", resp.Status)
+	}
+
+	var doc []struct {
+		Role    string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("parse messages: %w", err)
+	}
+
+	var out []Message
+	for _, m := range doc {
+		var sb strings.Builder
+		for _, c := range m.Content {
+			if c.Text != "" {
+				sb.WriteString(c.Text)
+				sb.WriteString("\n")
+			}
+		}
+		out = append(out, Message{Role: m.Role, Content: strings.TrimSpace(sb.String())})
+	}
+	return out, nil
+}
+
+// ExportMarkdown renders a session message list as a Markdown transcript.
+func ExportMarkdown(sessionID string, msgs []Message) string {
+	var sb strings.Builder
+	sb.WriteString("# Session " + sessionID + "\n\n")
+	for _, m := range msgs {
+		if strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		label := "User"
+		if m.Role == "assistant" {
+			label = "Assistant"
+		} else if m.Role == "tool" {
+			label = "Tool"
+		}
+		sb.WriteString("## " + label + "\n\n")
+		sb.WriteString(m.Content)
+		sb.WriteString("\n\n")
+	}
+	return strings.TrimSpace(sb.String())
+}

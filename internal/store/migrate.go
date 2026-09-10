@@ -60,6 +60,28 @@ var migrations = []migration{
 	{name: "tasks_available_at", apply: migrationTasksAvailableAt},
 	{name: "rules", apply: migrationRules},
 	{name: "audit_log", apply: migrationAuditLog},
+	{name: "archives", apply: migrationArchives},
+}
+
+// migrationArchives adds the session archive table.
+func migrationArchives(ctx context.Context, db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS archives (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL DEFAULT '',
+			format TEXT NOT NULL DEFAULT 'markdown',
+			content TEXT NOT NULL DEFAULT '',
+			size INTEGER NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.ExecContext(ctx, s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrationAuditLog adds the API audit trail table.

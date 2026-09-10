@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -106,5 +107,26 @@ func TestBaseURLTrailingSlash(t *testing.T) {
 	c := New("http://example.com:4096/")
 	if c.BaseURL() != "http://example.com:4096" {
 		t.Fatalf("trailing slash not trimmed: %q", c.BaseURL())
+	}
+}
+
+func TestExportMarkdown(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi there"},
+		{Role: "user", Content: ""}, // empty should be skipped
+	}
+	out := ExportMarkdown("ses_1", msgs)
+	if !strings.Contains(out, "# Session ses_1") {
+		t.Fatalf("missing header")
+	}
+	if !strings.Contains(out, "## User") || !strings.Contains(out, "hello") {
+		t.Fatalf("missing user block")
+	}
+	if !strings.Contains(out, "## Assistant") || !strings.Contains(out, "hi there") {
+		t.Fatalf("missing assistant block")
+	}
+	if strings.Count(out, "## User") != 1 {
+		t.Fatalf("empty user message not skipped: %s", out)
 	}
 }
