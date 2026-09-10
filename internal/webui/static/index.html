@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCode Backend 配置</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #181b21; --border: #262a33; --text: #e6e8ec;
+    --muted: #9aa1ad; --primary: #6366f1; --danger: #ef4444; --ok: #10b981;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", Roboto, "PingFang SC", sans-serif; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.desc { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 13px; }
+  input[type=password], input[type=text] { width: 100%; padding: 9px 12px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); font-size: 14px; }
+  button { padding: 9px 16px; border: none; border-radius: 8px;
+    background: var(--primary); color: #fff; font-size: 14px; cursor: pointer; }
+  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  button.danger { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+  .msg.ok { color: var(--ok); } .msg.err { color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; }
+  .badge { display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+  .badge.active { background: rgba(16,185,129,.15); color: var(--ok); }
+  .badge.revoked { background: rgba(239,68,68,.15); color: var(--danger); }
+  .muted { color: var(--muted); }
+  .hidden { display: none; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>OpenCode Backend</h1>
+  <p class="desc">无头服务的配置面板。管理登录密码与 APP 访问 Token。</p>
+
+  <div id="loginCard" class="card">
+    <h2>登录</h2>
+    <label for="pw">管理密码</label>
+    <input type="password" id="pw" placeholder="默认密码见安装时提示，可在下方修改">
+    <div class="row" style="margin-top:12px">
+      <button onclick="doLogin()">登录</button>
+    </div>
+    <div id="loginMsg" class="msg"></div>
+  </div>
+
+  <div id="adminCard" class="card hidden">
+    <h2>系统状态</h2>
+    <div id="sysInfo" class="muted">加载中…</div>
+
+    <h2 style="margin-top:20px">修改管理密码</h2>
+    <label for="newpw">新密码</label>
+    <input type="password" id="newpw" placeholder="至少 4 位">
+    <div class="row" style="margin-top:12px">
+      <button onclick="doChangePassword()">保存密码</button>
+    </div>
+    <div id="pwMsg" class="msg"></div>
+
+    <h2 style="margin-top:20px">APP Token</h2>
+    <div class="row">
+      <input type="text" id="tokenName" placeholder="设备名，如 我的手机" style="flex:1">
+      <button onclick="doCreateToken()">生成 Token</button>
+    </div>
+    <div id="tokenMsg" class="msg"></div>
+    <div id="newTokenBox" class="hidden">
+      <label>新 Token（仅显示一次，请立即保存）</label>
+      <input type="text" id="newToken" class="mono" readonly>
+    </div>
+    <table id="tokenTable">
+      <thead><tr><th>名称</th><th>ID</th><th>创建时间</th><th>状态</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const SESSION_KEY = "ocb_web_session";
+let session = localStorage.getItem(SESSION_KEY) || "";
+
+function hdr(extra) {
+  const h = { "Content-Type": "application/json" };
+  if (session) h["X-Web-Session"] = session;
+  return Object.assign(h, extra || {});
+}
+function show(el, msg, ok) {
+  el.textContent = msg || "";
+  el.className = "msg " + (ok ? "ok" : "err");
+}
+
+async function doLogin() {
+  const pw = document.getElementById("pw").value;
+  const res = await fetch("/api/web/session", { method: "POST", headers: hdr(), body: JSON.stringify({ password: pw }) });
+  const data = await res.json();
+  if (!res.ok) { show(document.getElementById("loginMsg"), data.error || "登录失败"); return; }
+  session = data.session;
+  localStorage.setItem(SESSION_KEY, session);
+  show(document.getElementById("loginMsg"), "已登录", true);
+  loadAdmin();
+}
+
+async function loadAdmin() {
+  const login = document.getElementById("loginCard");
+  const admin = document.getElementById("adminCard");
+  if (!session) { login.classList.remove("hidden"); admin.classList.add("hidden"); return; }
+  login.classList.add("hidden");
+  admin.classList.remove("hidden");
+  const res = await fetch("/api/system", { headers: hdr() });
+  if (res.status === 401) { session = ""; localStorage.removeItem(SESSION_KEY); loadAdmin(); return; }
+  const sys = await res.json();
+  document.getElementById("sysInfo").textContent =
+    `后端 opencode-backend · 上游 ${sys.opencodeURL} · 版本 ${sys.opencodeVersion || "未知"} · 数据库 ${sys.db}`;
+  loadTokens();
+}
+
+async function doChangePassword() {
+  const np = document.getElementById("newpw").value;
+  const res = await fetch("/api/web/password", { method: "POST", headers: hdr(), body: JSON.stringify({ newPassword: np }) });
+  const data = await res.json();
+  show(document.getElementById("pwMsg"), res.ok ? "密码已更新" : (data.error || "修改失败"), res.ok);
+}
+
+async function loadTokens() {
+  const res = await fetch("/api/tokens", { headers: hdr() });
+  if (!res.ok) return;
+  const tokens = await res.json();
+  const tb = document.querySelector("#tokenTable tbody");
+  tb.innerHTML = "";
+  for (const t of tokens) {
+    const tr = document.createElement("tr");
+    const active = !t.revokedAt;
+    tr.innerHTML = `
+      <td>${escapeHtml(t.name || "(未命名)")}</td>
+      <td class="mono">${escapeHtml(t.id)}</td>
+      <td>${new Date(t.createdAt).toLocaleString()}</td>
+      <td><span class="badge ${active ? "active" : "revoked"}">${active ? "启用" : "已撤销"}</span></td>
+      <td>${active ? `<button class="danger" onclick="doRevoke('${escapeHtml(t.id)}')">撤销</button>` : ""}</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+async function doCreateToken() {
+  const name = document.getElementById("tokenName").value;
+  const res = await fetch("/api/tokens", { method: "POST", headers: hdr(), body: JSON.stringify({ name }) });
+  const data = await res.json();
+  if (!res.ok) { show(document.getElementById("tokenMsg"), data.error || "生成失败"); return; }
+  const box = document.getElementById("newTokenBox");
+  box.classList.remove("hidden");
+  document.getElementById("newToken").value = data.token;
+  show(document.getElementById("tokenMsg"), "Token 已生成，仅显示一次", true);
+  document.getElementById("tokenName").value = "";
+  loadTokens();
+}
+
+async function doRevoke(id) {
+  await fetch("/api/tokens/" + encodeURIComponent(id), { method: "DELETE", headers: hdr() });
+  loadTokens();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+loadAdmin();
+</script>
+</body>
+</html>
