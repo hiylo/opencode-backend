@@ -29,7 +29,6 @@ type Server struct {
 	openCode    *opencode.Client
 	hub         *push.Hub
 	automation  *automation.Engine
-	webSessions map[string]time.Time // sid -> expiry
 	httpServer  *http.Server
 	hasWebUI    bool
 	webUIFS     webUIFSProvider
@@ -39,12 +38,11 @@ type Server struct {
 // New assembles the server with its dependencies.
 func New(cfg *config.Config, st store.Store, am *auth.Manager, oc *opencode.Client, hub *push.Hub) *Server {
 	return &Server{
-		cfg:         cfg,
-		store:       st,
-		auth:        am,
-		openCode:    oc,
-		hub:         hub,
-		webSessions: make(map[string]time.Time),
+		cfg:        cfg,
+		store:      st,
+		auth:       am,
+		openCode:   oc,
+		hub:        hub,
 	}
 }
 
@@ -175,20 +173,26 @@ func (w *statusWriter) Flush() {
 	}
 }
 
-// registerWebSession issues a signed session id for the web UI after password login.
-func (s *Server) registerWebSession() string {
+// registerWebSession issues a signed session id for the web UI after password
+// login and persists it to the store so sessions survive restarts.
+func (s *Server) registerWebSession(r *http.Request) (string, error) {
 	buf := make([]byte, 16)
 	_, _ = rand.Read(buf)
 	sid := hex.EncodeToString(buf)
-	s.webSessions[sid] = time.Now().Add(24 * time.Hour)
-	return sid
+	expires := time.Now().Add(24 * time.Hour)
+	if err := s.store.CreateWebSession(r.Context(), sid, expires); err != nil {
+		return "", err
+	}
+	return sid, nil
 }
 
 // requireWeb validates that sid is an active web session.
 func (s *Server) requireWeb(r *http.Request) bool {
 	sid := r.Header.Get("X-Web-Session")
-	exp, ok := s.webSessions[sid]
-	if !ok || time.Now().After(exp) {
+	if sid == "" {
+		return false
+	}
+	if _, err := s.store.GetWebSession(r.Context(), sid); err != nil {
 		return false
 	}
 	return true

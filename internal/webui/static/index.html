@@ -131,6 +131,19 @@ function show(el, msg, ok) {
   el.className = "msg " + (ok ? "ok" : "err");
 }
 
+// 统一的 fetch 封装：任何接口返回 401 都视为会话过期，自动回登录页。
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (res.status === 401 && session) {
+    session = "";
+    localStorage.removeItem(SESSION_KEY);
+    show(document.getElementById("loginMsg"), "会话已过期，请重新登录");
+    loadAdmin();
+    throw new Error("unauthorized");
+  }
+  return res;
+}
+
 async function doLogin() {
   const pw = document.getElementById("pw").value;
   const res = await fetch("/api/web/session", { method: "POST", headers: hdr(), body: JSON.stringify({ password: pw }) });
@@ -148,8 +161,10 @@ async function loadAdmin() {
   if (!session) { login.classList.remove("hidden"); admin.classList.add("hidden"); return; }
   login.classList.add("hidden");
   admin.classList.remove("hidden");
-  const res = await fetch("/api/system", { headers: hdr() });
-  if (res.status === 401) { session = ""; localStorage.removeItem(SESSION_KEY); loadAdmin(); return; }
+  let res;
+  try {
+    res = await api("/api/system", { headers: hdr() });
+  } catch (_) { return; }
   const sys = await res.json();
   document.getElementById("sysInfo").textContent =
     `后端 opencode-backend · 上游 ${sys.opencodeURL} · 版本 ${sys.opencodeVersion || "未知"} · 数据库 ${sys.db}`;
@@ -162,13 +177,13 @@ async function loadAdmin() {
 
 async function doChangePassword() {
   const np = document.getElementById("newpw").value;
-  const res = await fetch("/api/web/password", { method: "POST", headers: hdr(), body: JSON.stringify({ newPassword: np }) });
+  const res = await api("/api/web/password", { method: "POST", headers: hdr(), body: JSON.stringify({ newPassword: np }) });
   const data = await res.json();
   show(document.getElementById("pwMsg"), res.ok ? "密码已更新" : (data.error || "修改失败"), res.ok);
 }
 
 async function loadTokens() {
-  const res = await fetch("/api/tokens", { headers: hdr() });
+  const res = await api("/api/tokens", { headers: hdr() });
   if (!res.ok) return;
   const tokens = await res.json();
   const tb = document.querySelector("#tokenTable tbody");
@@ -192,7 +207,7 @@ async function doCreateToken() {
     show(document.getElementById("tokenMsg"), "请填写设备名称");
     return;
   }
-  const res = await fetch("/api/tokens", { method: "POST", headers: hdr(), body: JSON.stringify({ name }) });
+  const res = await api("/api/tokens", { method: "POST", headers: hdr(), body: JSON.stringify({ name }) });
   const data = await res.json();
   if (!res.ok) { show(document.getElementById("tokenMsg"), data.error || "生成失败"); return; }
   const box = document.getElementById("newTokenBox");
@@ -204,7 +219,7 @@ async function doCreateToken() {
 }
 
 async function doRevoke(id) {
-  await fetch("/api/tokens/" + encodeURIComponent(id), { method: "DELETE", headers: hdr() });
+  await api("/api/tokens/" + encodeURIComponent(id), { method: "DELETE", headers: hdr() });
   loadTokens();
 }
 
@@ -248,16 +263,16 @@ async function loadTasks() {
   tb.innerHTML = "";
   for (const task of list) {
     const tr = document.createElement("tr");
-    const status = task.Status || "queued";
-    const detail = (task.Error || task.Result || "").trim();
+    const status = task.status || "queued";
+    const detail = (task.error || task.result || "").trim();
     tr.innerHTML = `
-      <td class="mono">${escapeHtml(task.ID)}</td>
-      <td class="clip" title="${escapeHtml(task.Directory || "")}">${escapeHtml(task.Directory) || "-"}</td>
-      <td class="clip" title="${escapeHtml(task.Prompt)}">${escapeHtml(task.Prompt)}</td>
+      <td class="mono">${escapeHtml(task.id)}</td>
+      <td class="clip" title="${escapeHtml(task.directory || "")}">${escapeHtml(task.directory) || "-"}</td>
+      <td class="clip" title="${escapeHtml(task.prompt)}">${escapeHtml(task.prompt)}</td>
       <td><span class="badge ${escapeHtml(status)}">${escapeHtml(TASK_STATUS[status] || status)}</span></td>
-      <td class="clip" title="${escapeHtml(task.Progress || "")}">${escapeHtml(task.Progress) || "-"}</td>
+      <td class="clip" title="${escapeHtml(task.progress || "")}">${escapeHtml(task.progress) || "-"}</td>
       <td class="clip" title="${escapeHtml(detail)}">${escapeHtml(detail) || "-"}</td>
-      <td>${new Date(task.CreatedAt).toLocaleString()}</td>`;
+      <td>${new Date(task.createdAt).toLocaleString()}</td>`;
     tb.appendChild(tr);
   }
 }

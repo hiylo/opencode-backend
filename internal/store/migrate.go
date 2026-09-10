@@ -61,6 +61,24 @@ var migrations = []migration{
 	{name: "rules", apply: migrationRules},
 	{name: "audit_log", apply: migrationAuditLog},
 	{name: "archives", apply: migrationArchives},
+	{name: "web_sessions", apply: migrationWebSessions},
+}
+
+// migrationWebSessions adds the persisted web admin session table.
+func migrationWebSessions(ctx context.Context, db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS web_sessions (
+			id TEXT PRIMARY KEY,
+			expires_at TIMESTAMP NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_web_sessions_expires ON web_sessions(expires_at)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.ExecContext(ctx, s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrationArchives adds the session archive table.

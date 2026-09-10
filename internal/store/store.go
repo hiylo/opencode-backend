@@ -116,6 +116,17 @@ type Store interface {
 	TokenUsageByAudit(ctx context.Context, limit int) ([]*TokenUsage, error)
 	// CountArchives returns the number of stored session archives.
 	CountArchives(ctx context.Context) (int, error)
+
+	// ---- Web sessions ----
+
+	// CreateWebSession stores a web session with an expiry.
+	CreateWebSession(ctx context.Context, id string, expiresAt time.Time) error
+	// GetWebSession returns a non-expired session by id.
+	GetWebSession(ctx context.Context, id string) (*WebSession, error)
+	// DeleteWebSession removes a session (logout).
+	DeleteWebSession(ctx context.Context, id string) error
+	// DeleteExpiredWebSessions purges expired sessions.
+	DeleteExpiredWebSessions(ctx context.Context) (int, error)
 }
 
 // Open opens a store for the given driver/dsn. It applies all migrations

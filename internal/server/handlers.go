@@ -74,7 +74,11 @@ func (s *Server) handleWebSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusUnauthorized, "invalid password")
 			return
 		}
-		sid := s.registerWebSession()
+		sid, err := s.registerWebSession(r)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "create session failed")
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"session": sid})
 	case http.MethodDelete:
 		if !s.requireWeb(r) {
@@ -82,7 +86,7 @@ func (s *Server) handleWebSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sid := r.Header.Get("X-Web-Session")
-		delete(s.webSessions, sid)
+		_ = s.store.DeleteWebSession(r.Context(), sid)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")

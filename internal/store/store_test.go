@@ -194,3 +194,42 @@ func TestRetryTaskUnknownID(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestWebSessionPersistence(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	// Create a session that expires in the future.
+	exp := time.Now().Add(time.Hour)
+	if err := st.CreateWebSession(ctx, "sid_abc", exp); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := st.GetWebSession(ctx, "sid_abc")
+	if err != nil {
+		t.Fatalf("get valid session: %v", err)
+	}
+	if got.ID != "sid_abc" {
+		t.Fatalf("id %q", got.ID)
+	}
+
+	// Expired session is not found.
+	if err := st.CreateWebSession(ctx, "sid_expired", time.Now().Add(-time.Hour)); err != nil {
+		t.Fatalf("create expired: %v", err)
+	}
+	if _, err := st.GetWebSession(ctx, "sid_expired"); err != ErrNotFound {
+		t.Fatalf("expired session should be ErrNotFound, got %v", err)
+	}
+
+	// Delete.
+	if err := st.DeleteWebSession(ctx, "sid_abc"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := st.GetWebSession(ctx, "sid_abc"); err != ErrNotFound {
+		t.Fatalf("deleted session still found: %v", err)
+	}
+
+	// Purge expired.
+	if n, err := st.DeleteExpiredWebSessions(ctx); err != nil || n < 1 {
+		t.Fatalf("purge expired: n=%d err=%v", n, err)
+	}
+}
