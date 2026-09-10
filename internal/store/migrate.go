@@ -58,6 +58,30 @@ var migrations = []migration{
 	{name: "initial", apply: migrationInitial},
 	{name: "tasks", apply: migrationTasks},
 	{name: "tasks_available_at", apply: migrationTasksAvailableAt},
+	{name: "rules", apply: migrationRules},
+}
+
+// migrationRules adds the automation rules table.
+func migrationRules(ctx context.Context, db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS rules (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT 'cron',
+			schedule TEXT NOT NULL DEFAULT '',
+			directory TEXT NOT NULL DEFAULT '',
+			prompt TEXT NOT NULL DEFAULT '',
+			enabled BOOLEAN NOT NULL DEFAULT 1,
+			last_fired_at TIMESTAMP NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.ExecContext(ctx, s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrationTasksAvailableAt adds the available_at gate used for retry backoff.

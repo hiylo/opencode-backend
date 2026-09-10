@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hiylo/opencode-backend/internal/auth"
+	"github.com/hiylo/opencode-backend/internal/automation"
 	"github.com/hiylo/opencode-backend/internal/config"
 	"github.com/hiylo/opencode-backend/internal/opencode"
 	"github.com/hiylo/opencode-backend/internal/push"
@@ -81,6 +82,12 @@ func main() {
 	// upstream OpenCode server. Runs for the lifetime of the process.
 	exec := tasks.NewExecutor(st, hub, cfg.OpenCodeURL)
 	go exec.Run(ctx)
+
+	// Automation engine: evaluates cron rules and handles webhook triggers.
+	// Fired rules enqueue tasks which the executor above picks up.
+	eng := automation.NewEngine(st, 15*time.Second)
+	srv.SetAutomation(eng)
+	go eng.Run(ctx)
 
 	// Orchestration: periodically report upstream health so subscribers get
 	// live status without polling from the app.

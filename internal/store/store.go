@@ -76,6 +76,19 @@ type Store interface {
 	RetryTask(ctx context.Context, id string, backoffSecs int) error
 	// CancelTask marks a queued/running task canceled. Returns true if changed.
 	CancelTask(ctx context.Context, id string) (bool, error)
+
+	// ---- Automation rules ----
+
+	// CreateRule persists a new rule.
+	CreateRule(ctx context.Context, r *Rule) error
+	// ListRules returns all rules, enabled first.
+	ListRules(ctx context.Context) ([]*Rule, error)
+	// GetRule loads a single rule.
+	GetRule(ctx context.Context, id string) (*Rule, error)
+	// DeleteRule removes a rule by id.
+	DeleteRule(ctx context.Context, id string) error
+	// MarkRuleFired records when a rule last created a task.
+	MarkRuleFired(ctx context.Context, id string) error
 }
 
 // Open opens a store for the given driver/dsn. It applies all migrations

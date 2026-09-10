@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hiylo/opencode-backend/internal/auth"
+	"github.com/hiylo/opencode-backend/internal/automation"
 	"github.com/hiylo/opencode-backend/internal/config"
 	"github.com/hiylo/opencode-backend/internal/opencode"
 	"github.com/hiylo/opencode-backend/internal/push"
@@ -27,6 +28,7 @@ type Server struct {
 	auth        *auth.Manager
 	openCode    *opencode.Client
 	hub         *push.Hub
+	automation  *automation.Engine
 	webSessions map[string]time.Time // sid -> expiry
 	httpServer  *http.Server
 	hasWebUI    bool
@@ -46,6 +48,9 @@ func New(cfg *config.Config, st store.Store, am *auth.Manager, oc *opencode.Clie
 	}
 }
 
+// SetAutomation wires the automation engine used by rule webhooks.
+func (s *Server) SetAutomation(eng *automation.Engine) { s.automation = eng }
+
 // Routes registers all handlers on mux and starts background goroutines.
 func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", s.handleHealth)
@@ -59,6 +64,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/projects/", s.handleProjectSessions)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/", s.handleTaskByID)
+	mux.HandleFunc("/api/rules", s.handleRules)
+	mux.HandleFunc("/api/rules/", s.handleRuleByID)
+	mux.HandleFunc("/api/webhook", s.handleRuleWebhook)
 	mux.HandleFunc("/", s.handleIndex)
 }
 

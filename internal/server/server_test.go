@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hiylo/opencode-backend/internal/auth"
+	"github.com/hiylo/opencode-backend/internal/automation"
 	"github.com/hiylo/opencode-backend/internal/config"
 	"github.com/hiylo/opencode-backend/internal/opencode"
 	"github.com/hiylo/opencode-backend/internal/push"
@@ -57,6 +59,7 @@ func newTestServer(t *testing.T) *Server {
 	go hub.Run()
 
 	srv := New(cfg, st, am, oc, hub)
+	srv.SetAutomation(automation.NewEngine(st, time.Hour))
 	mux := http.NewServeMux()
 	srv.Routes(mux)
 	srv.testMux = mux
@@ -281,5 +284,112 @@ func TestTaskRequiresToken(t *testing.T) {
 	rec := s.do(t, http.MethodPost, "/api/tasks", `{"prompt":"x"}`, nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 without token, got %d", rec.Code)
+	}
+}
+
+func TestRulesCRUDAndWebhook(t *testing.T) {
+	s := newTestServer(t)
+
+	// Web session (rules are admin-managed).
+	rec := s.do(t, http.MethodPost, "/api/web/session", `{"password":"admin"}`, nil)
+	var login struct {
+		Session string `json:"session"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &login)
+	wh := map[string]string{"X-Web-Session": login.Session}
+
+	// Create a cron rule.
+	rec = s.do(t, http.MethodPost, "/api/rules", `{"name":"nightly","kind":"cron","schedule":"5m","directory":"/w","prompt":"run tests","enabled":true}`, wh)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create rule status %d: %s", rec.Code, rec.Body.String())
+	}
+	var rule struct {
+		ID string `json:"ID"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &rule)
+	if rule.ID == "" {
+		t.Fatalf("no rule id")
+	}
+
+	// List includes it.
+	rec = s.do(t, http.MethodGet, "/api/rules", "", wh)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list rules status %d", rec.Code)
+	}
+	var list struct {
+		Rules []map[string]any `json:"rules"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &list)
+	if len(list.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(list.Rules))
+	}
+
+	// Rules require web session (not token).
+	rec = s.do(t, http.MethodGet, "/api/rules", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without session, got %d", rec.Code)
+	}
+
+	// Delete rule.
+	rec = s.do(t, http.MethodDelete, "/api/rules/"+rule.ID, "", wh)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete rule status %d", rec.Code)
+	}
+	rec = s.do(t, http.MethodDelete, "/api/rules/"+rule.ID, "", wh)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 on double delete, got %d", rec.Code)
+	}
+}
+
+func TestWebhookFiresRule(t *testing.T) {
+	s := newTestServer(t)
+
+	// Login and create an HTTP rule via web session.
+	rec := s.do(t, http.MethodPost, "/api/web/session", `{"password":"admin"}`, nil)
+	var login struct {
+		Session string `json:"session"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &login)
+	wh := map[string]string{"X-Web-Session": login.Session}
+
+	rec = s.do(t, http.MethodPost, "/api/rules", `{"name":"hook","kind":"http","schedule":"/workspaces/opencode","prompt":"run on hook","enabled":true}`, wh)
+	var rule struct {
+		ID string `json:"ID"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &rule)
+
+	// Fire webhook for matching target.
+	rec = s.do(t, http.MethodPost, "/api/webhook?target=/workspaces/opencode", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("webhook status %d: %s", rec.Code, rec.Body.String())
+	}
+	var fired struct {
+		Fired bool `json:"fired"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &fired)
+	if !fired.Fired {
+		t.Fatalf("webhook did not fire")
+	}
+
+	// A task must have been created (visible with an APP token).
+	rec = s.do(t, http.MethodPost, "/api/tokens", `{"name":"hooker"}`, wh)
+	var tok struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &tok)
+	th := map[string]string{"Authorization": "Bearer " + tok.Token}
+	rec = s.do(t, http.MethodGet, "/api/tasks", "", th)
+	var list struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &list)
+	if len(list.Tasks) != 1 {
+		t.Fatalf("expected 1 task from webhook, got %d", len(list.Tasks))
+	}
+
+	// Non-matching target -> 404.
+	rec = s.do(t, http.MethodPost, "/api/webhook?target=/nope", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for non-match, got %d", rec.Code)
 	}
 }
