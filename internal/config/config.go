@@ -22,7 +22,14 @@ type Config struct {
 	PostgresDSN string
 	// DefaultAdminPassword is the initial web admin password if no stored one exists.
 	DefaultAdminPassword string
+	// ShowVersion prints the version and exits when true.
+	ShowVersion bool
+	// HealthCheck runs connectivity checks and exits when true.
+	HealthCheck bool
 }
+
+// Version is the semantic version reported by --version.
+const Version = "0.1.0"
 
 // Parse reads configuration from command-line flags and environment variables.
 // Environment variables take precedence over flag defaults where set.
@@ -35,6 +42,8 @@ func Parse(args []string) (*Config, error) {
 	sqlitePath := fs.String("sqlite-path", envOr("OCB_SQLITE_PATH", "opencode-backend.db"), "SQLite database file path")
 	postgresDSN := fs.String("pg-dsn", os.Getenv("OCB_PG_DSN"), "PostgreSQL connection string")
 	defaultAdmin := fs.String("default-admin-password", envOr("OCB_ADMIN_PASSWORD", "admin"), "default web admin password (used only on first initialization)")
+	showVersion := fs.Bool("version", false, "print version and exit")
+	healthCheck := fs.Bool("health-check", false, "run connectivity checks and exit")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -55,6 +64,8 @@ func Parse(args []string) (*Config, error) {
 		SQLitePath:           *sqlitePath,
 		PostgresDSN:          *postgresDSN,
 		DefaultAdminPassword: *defaultAdmin,
+		ShowVersion:          *showVersion,
+		HealthCheck:          *healthCheck,
 	}, nil
 }
 

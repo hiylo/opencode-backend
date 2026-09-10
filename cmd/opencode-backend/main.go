@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -31,6 +32,15 @@ func main() {
 	cfg, err := config.Parse(os.Args[1:])
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	if cfg.ShowVersion {
+		fmt.Printf("opencode-backend %s\n", config.Version)
+		return
+	}
+
+	if cfg.HealthCheck {
+		os.Exit(runHealthCheck(cfg))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -104,4 +114,40 @@ func main() {
 		log.Fatalf("server: %v", err)
 	}
 	log.Println("opencode-backend stopped")
+}
+
+// runHealthCheck verifies database and upstream connectivity without starting
+// the HTTP server. It returns a process exit code (0 = all healthy).
+func runHealthCheck(cfg *config.Config) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var dsn string
+	if cfg.DBDriver == "sqlite" {
+		dsn = store.SQLiteDSN(cfg.SQLitePath)
+	} else {
+		dsn = cfg.PostgresDSN
+	}
+	st, err := store.OpenFromConfig(ctx, cfg.DBDriver, dsn)
+	if err != nil {
+		fmt.Printf("FAIL db[%s]: %v\n", cfg.DBDriver, err)
+		return 1
+	}
+	defer st.Close()
+	fmt.Printf("OK   db[%s]\n", cfg.DBDriver)
+
+	oc := opencode.New(cfg.OpenCodeURL)
+	if err := oc.Ping(ctx); err != nil {
+		fmt.Printf("FAIL upstream %s: %v\n", cfg.OpenCodeURL, err)
+		return 1
+	}
+	version, _ := oc.GetVersion(ctx)
+	fmt.Printf("OK   upstream %s (opencode %s)\n", cfg.OpenCodeURL, version)
+
+	if err := st.Ping(ctx); err != nil {
+		fmt.Printf("FAIL store ping: %v\n", err)
+		return 1
+	}
+	fmt.Println("OK   store ping")
+	return 0
 }

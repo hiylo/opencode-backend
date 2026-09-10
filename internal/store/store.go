@@ -70,6 +70,10 @@ type Store interface {
 	CompleteTask(ctx context.Context, id, result string) error
 	// FailTask marks a task failed.
 	FailTask(ctx context.Context, id, errMsg string) error
+	// RetryTask re-queues a failed task for another attempt after backoffSecs,
+	// incrementing attempts and clearing the error. Returns ErrNotFound if the
+	// task does not exist.
+	RetryTask(ctx context.Context, id string, backoffSecs int) error
 	// CancelTask marks a queued/running task canceled. Returns true if changed.
 	CancelTask(ctx context.Context, id string) (bool, error)
 }

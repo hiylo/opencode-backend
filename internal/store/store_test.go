@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func newTestStore(t *testing.T) Store {
@@ -132,5 +133,64 @@ func TestOpenSQLiteFile(t *testing.T) {
 	defer st.Close()
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("db file not created: %v", err)
+	}
+}
+
+func TestTaskRetryBackoff(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	// Seed a task, then simulate: claim -> fail -> retry.
+	task := &Task{ID: "retry1", SessionID: "", Directory: "/w", Prompt: "p"}
+	if err := st.CreateTask(ctx, task); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	claimed, err := st.ClaimNextTask(ctx)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if claimed.Attempts != 1 {
+		t.Fatalf("attempts after first claim = %d, want 1", claimed.Attempts)
+	}
+
+	// Fail then retry with 5s backoff.
+	if err := st.FailTask(ctx, claimed.ID, "boom"); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+	if err := st.RetryTask(ctx, claimed.ID, 5); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	got, err := st.GetTask(ctx, claimed.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != TaskQueued {
+		t.Fatalf("status %q want queued", got.Status)
+	}
+	if got.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1 (claim already counted one)", got.Attempts)
+	}
+	if got.Error != "" {
+		t.Fatalf("error not cleared: %q", got.Error)
+	}
+	// available_at should be in the future (>= now - small skew).
+	if !got.AvailableAt.After(time.Now().Add(-2 * time.Second)) {
+		t.Fatalf("available_at not scheduled in future: %v", got.AvailableAt)
+	}
+
+	// A claim now must NOT pick it up (backoff window active).
+	next, err := st.ClaimNextTask(ctx)
+	if err != ErrNotFound {
+		t.Fatalf("expected no claimable task during backoff, got %+v err=%v", next, err)
+	}
+}
+
+func TestRetryTaskUnknownID(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	if err := st.RetryTask(ctx, "nope", 5); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }

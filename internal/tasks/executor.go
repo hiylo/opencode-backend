@@ -23,6 +23,7 @@ type Executor struct {
 	hub          *push.Hub
 	openCodeBase string // base URL of the OpenCode HTTP server
 	httpClient   *http.Client
+	maxRetries   int // additional attempts after the first failure
 }
 
 // NewExecutor wires an executor. openCodeBase is required; the executor only
@@ -33,7 +34,18 @@ func NewExecutor(st store.Store, hub *push.Hub, openCodeBase string) *Executor {
 		hub:          hub,
 		openCodeBase: openCodeBase,
 		httpClient:   &http.Client{Timeout: 90 * time.Second},
+		maxRetries:   2,
 	}
+}
+
+// WithMaxRetries sets how many times a failed task is re-queued before it is
+// permanently marked failed. Returns the receiver for chaining.
+func (e *Executor) WithMaxRetries(n int) *Executor {
+	if n < 0 {
+		n = 0
+	}
+	e.maxRetries = n
+	return e
 }
 
 // Run is the worker loop: claim one queued task, execute it, repeat.
@@ -62,6 +74,8 @@ func (e *Executor) Run(ctx context.Context) {
 }
 
 // execute drives one task to completion and updates the store + pushes events.
+// On failure it either re-queues the task for another attempt (bounded by
+// maxRetries, with exponential backoff) or marks it permanently failed.
 func (e *Executor) execute(ctx context.Context, t *store.Task) {
 	pushTask := func(status string, task *store.Task) {
 		e.hub.Broadcast(push.Message{
@@ -73,6 +87,26 @@ func (e *Executor) execute(ctx context.Context, t *store.Task) {
 		})
 	}
 
+	failWithRetry := func(errMsg string) {
+		if t.Attempts > e.maxRetries {
+			_ = e.store.FailTask(ctx, t.ID, errMsg)
+			pushTask("failed", t)
+			return
+		}
+		// Re-queue for another attempt with exponential backoff.
+		backoff := 5 * (1 << (t.Attempts - 1)) // 5s, 10s, 20s...
+		if backoff > 120 {
+			backoff = 120
+		}
+		if err := e.store.RetryTask(ctx, t.ID, backoff); err != nil {
+			_ = e.store.FailTask(ctx, t.ID, errMsg)
+			pushTask("failed", t)
+			return
+		}
+		pushTask("retrying", t)
+		log.Printf("tasks: %s failed (attempt %d/%d), will retry in %ds: %s", t.ID, t.Attempts, e.maxRetries, backoff, errMsg)
+	}
+
 	pushTask("running", t)
 
 	// Step 1: ensure a session exists to run the prompt in.
@@ -80,8 +114,7 @@ func (e *Executor) execute(ctx context.Context, t *store.Task) {
 	if sessionID == "" {
 		created, err := e.createSession(ctx, t.Directory)
 		if err != nil {
-			_ = e.store.FailTask(ctx, t.ID, "create session: "+err.Error())
-			pushTask("failed", t)
+			failWithRetry("create session: " + err.Error())
 			return
 		}
 		sessionID = created
@@ -94,8 +127,7 @@ func (e *Executor) execute(ctx context.Context, t *store.Task) {
 		_ = e.store.UpdateTaskProgress(ctx, t.ID, partial)
 	})
 	if err != nil {
-		_ = e.store.FailTask(ctx, t.ID, err.Error())
-		pushTask("failed", t)
+		failWithRetry(err.Error())
 		return
 	}
 

@@ -57,6 +57,22 @@ type migration struct {
 var migrations = []migration{
 	{name: "initial", apply: migrationInitial},
 	{name: "tasks", apply: migrationTasks},
+	{name: "tasks_available_at", apply: migrationTasksAvailableAt},
+}
+
+// migrationTasksAvailableAt adds the available_at gate used for retry backoff.
+// It must tolerate both freshly-migrated and pre-existing databases.
+func migrationTasksAvailableAt(ctx context.Context, db *sql.DB) error {
+	// SQLite supports ADD COLUMN with a constant default; PG too.
+	if _, err := db.ExecContext(ctx, `
+		ALTER TABLE tasks ADD COLUMN available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_tasks_available ON tasks(status, available_at)`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // migrationInitial creates the base tables shared by all drivers.
