@@ -89,6 +89,13 @@ type Store interface {
 	DeleteRule(ctx context.Context, id string) error
 	// MarkRuleFired records when a rule last created a task.
 	MarkRuleFired(ctx context.Context, id string) error
+
+	// ---- Audit trail ----
+
+	// RecordAudit inserts an API access audit entry.
+	RecordAudit(ctx context.Context, e *AuditEntry) error
+	// ListAudit returns recent audit entries, newest first.
+	ListAudit(ctx context.Context, tokenID string, limit int) ([]*AuditEntry, error)
 }
 
 // Open opens a store for the given driver/dsn. It applies all migrations

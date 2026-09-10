@@ -60,9 +60,7 @@ func newTestServer(t *testing.T) *Server {
 
 	srv := New(cfg, st, am, oc, hub)
 	srv.SetAutomation(automation.NewEngine(st, time.Hour))
-	mux := http.NewServeMux()
-	srv.Routes(mux)
-	srv.testMux = mux
+	srv.testMux = srv.routesMux()
 	return srv
 }
 
@@ -445,5 +443,59 @@ func TestBatchCreatesMultipleTasks(t *testing.T) {
 	rec = s.do(t, http.MethodPost, "/api/batch", `{"prompt":"x","targets":[{"directory":"/a"}]}`, nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 without token, got %d", rec.Code)
+	}
+}
+
+func TestAuditLogging(t *testing.T) {
+	s := newTestServer(t)
+
+	// Login + token.
+	rec := s.do(t, http.MethodPost, "/api/web/session", `{"password":"admin"}`, nil)
+	var login struct {
+		Session string `json:"session"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &login)
+	wh := map[string]string{"X-Web-Session": login.Session}
+	rec = s.do(t, http.MethodPost, "/api/tokens", `{"name":"audit-phone"}`, wh)
+	var tok struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &tok)
+
+	// Make a token-authenticated call.
+	th := map[string]string{"Authorization": "Bearer " + tok.Token}
+	rec = s.do(t, http.MethodGet, "/api/projects", "", th)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("projects status %d", rec.Code)
+	}
+
+	// Audit should have an entry for this token call.
+	rec = s.do(t, http.MethodGet, "/api/audit", "", wh)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit status %d", rec.Code)
+	}
+	var out struct {
+		Audit []struct {
+			TokenName string `json:"TokenName"`
+			Path      string `json:"Path"`
+		} `json:"audit"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Audit) == 0 {
+		t.Fatalf("expected audit entries")
+	}
+	// The newest entry should be our projects call.
+	last := out.Audit[0]
+	if last.Path != "/api/projects" {
+		t.Fatalf("last audit path %q want /api/projects", last.Path)
+	}
+	if last.TokenName != "audit-phone" {
+		t.Fatalf("audit token name %q", last.TokenName)
+	}
+
+	// Audit requires web session.
+	rec = s.do(t, http.MethodGet, "/api/audit", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without session, got %d", rec.Code)
 	}
 }

@@ -59,6 +59,29 @@ var migrations = []migration{
 	{name: "tasks", apply: migrationTasks},
 	{name: "tasks_available_at", apply: migrationTasksAvailableAt},
 	{name: "rules", apply: migrationRules},
+	{name: "audit_log", apply: migrationAuditLog},
+}
+
+// migrationAuditLog adds the API audit trail table.
+func migrationAuditLog(ctx context.Context, db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS audit_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			token_id TEXT NOT NULL DEFAULT '',
+			token_name TEXT NOT NULL DEFAULT '',
+			method TEXT NOT NULL DEFAULT '',
+			path TEXT NOT NULL DEFAULT '',
+			status INTEGER NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_token_created ON audit_log(token_id, id)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.ExecContext(ctx, s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrationRules adds the automation rules table.

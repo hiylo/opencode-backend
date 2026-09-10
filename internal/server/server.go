@@ -33,7 +33,7 @@ type Server struct {
 	httpServer  *http.Server
 	hasWebUI    bool
 	webUIFS     webUIFSProvider
-	testMux     *http.ServeMux // set only in tests
+	testMux     http.Handler // set only in tests
 }
 
 // New assembles the server with its dependencies.
@@ -67,6 +67,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/batch", s.handleBatch)
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/rules/", s.handleRuleByID)
+	mux.HandleFunc("/api/audit", s.handleAudit)
 	mux.HandleFunc("/api/webhook", s.handleRuleWebhook)
 	mux.HandleFunc("/", s.handleIndex)
 }
@@ -110,7 +111,38 @@ func (s *Server) logMiddleware(next http.Handler) http.Handler {
 		ww := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(ww, r)
 		log.Printf("http %d %s %s (%s)", ww.status, r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
+
+		// Audit: only API calls authenticated by an APP token are recorded.
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			return
+		}
+		if rec, ok := s.tokenFromRequest(r); ok {
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			defer cancel()
+			_ = s.store.RecordAudit(ctx, &store.AuditEntry{
+				TokenID:   rec.ID,
+				TokenName: rec.Name,
+				Method:    r.Method,
+				Path:      r.URL.Path,
+				Status:    ww.status,
+			})
+		}
 	})
+}
+
+// tokenFromRequest resolves the Bearer token (or ?token=) to its record.
+func (s *Server) tokenFromRequest(r *http.Request) (*store.Token, bool) {
+	if rec, ok := s.requireToken(r); ok {
+		return rec, true
+	}
+	if q := r.URL.Query().Get("token"); q != "" {
+		rec, err := s.auth.VerifyToken(r.Context(), q)
+		if err != nil || rec == nil {
+			return nil, false
+		}
+		return rec, true
+	}
+	return nil, false
 }
 
 type statusWriter struct {
