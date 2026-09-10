@@ -223,3 +223,16 @@ func TestParsePromptResponseEmptyText(t *testing.T) {
 		t.Fatalf("result %q", got.Result)
 	}
 }
+func TestSeverityMapping(t *testing.T) {
+	cases := map[string]string{
+		"failed":    push.Critical,
+		"retrying":  push.Warning,
+		"running":   push.Info,
+		"succeeded": push.Info,
+	}
+	for status, want := range cases {
+		if got := severityFor(status); got != want {
+			t.Fatalf("severityFor(%q) = %q, want %q", status, got, want)
+		}
+	}
+}

@@ -393,3 +393,57 @@ func TestWebhookFiresRule(t *testing.T) {
 		t.Fatalf("expected 404 for non-match, got %d", rec.Code)
 	}
 }
+
+func TestBatchCreatesMultipleTasks(t *testing.T) {
+	s := newTestServer(t)
+
+	// Login + token.
+	rec := s.do(t, http.MethodPost, "/api/web/session", `{"password":"admin"}`, nil)
+	var login struct {
+		Session string `json:"session"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &login)
+	wh := map[string]string{"X-Web-Session": login.Session}
+	rec = s.do(t, http.MethodPost, "/api/tokens", `{"name":"batch"}`, wh)
+	var tok struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &tok)
+	th := map[string]string{"Authorization": "Bearer " + tok.Token}
+
+	// Batch create for two targets.
+	rec = s.do(t, http.MethodPost, "/api/batch",
+		`{"prompt":"add logging","targets":[{"directory":"/a"},{"sessionId":"ses_1"}]}`, th)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("batch status %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Count int `json:"count"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Count != 2 {
+		t.Fatalf("expected 2 tasks, got %d", out.Count)
+	}
+
+	// Verify two tasks in store.
+	rec = s.do(t, http.MethodGet, "/api/tasks", "", th)
+	var list struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &list)
+	if len(list.Tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(list.Tasks))
+	}
+
+	// Empty targets rejected.
+	rec = s.do(t, http.MethodPost, "/api/batch", `{"prompt":"x","targets":[]}`, th)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty targets, got %d", rec.Code)
+	}
+
+	// No token rejected.
+	rec = s.do(t, http.MethodPost, "/api/batch", `{"prompt":"x","targets":[{"directory":"/a"}]}`, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", rec.Code)
+	}
+}

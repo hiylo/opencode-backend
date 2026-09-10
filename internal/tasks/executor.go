@@ -84,6 +84,7 @@ func (e *Executor) execute(ctx context.Context, t *store.Task) {
 				"id":     t.ID,
 				"status": status,
 			}),
+			Severity: severityFor(status),
 		})
 	}
 
@@ -293,4 +294,15 @@ func mustJSON(v any) json.RawMessage {
 		panic(err)
 	}
 	return b
+}
+// severityFor maps a task status to a push severity for notification routing.
+func severityFor(status string) string {
+	switch status {
+	case "failed":
+		return push.Critical
+	case "retrying":
+		return push.Warning
+	default:
+		return push.Info
+	}
 }

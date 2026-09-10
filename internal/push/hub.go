@@ -8,10 +8,20 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Message severity levels for client notification routing.
+const (
+	Info     = "info"
+	Warning  = "warning"
+	Critical = "critical"
+)
+
 // Message is a push event sent from the server to connected clients.
 type Message struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload,omitempty"`
+	// Severity routes the event to client notification channels
+	// (info = silent, warning/critical = notify).
+	Severity string `json:"severity,omitempty"`
 }
 
 // Hub fans out push messages to all connected WebSocket clients.
