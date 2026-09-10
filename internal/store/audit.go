@@ -8,13 +8,13 @@ import (
 
 // AuditEntry records a single authenticated API action for accountability.
 type AuditEntry struct {
-	ID        int64
-	TokenID   string
-	TokenName string
-	Method    string
-	Path      string
-	Status    int
-	CreatedAt time.Time
+	ID        int64     `json:"id"`
+	TokenID   string    `json:"tokenId"`
+	TokenName string    `json:"tokenName"`
+	Method    string    `json:"method"`
+	Path      string    `json:"path"`
+	Status    int       `json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // RecordAudit inserts an audit entry.
@@ -45,7 +45,7 @@ func (s *sqlStore) ListAudit(ctx context.Context, tokenID string, limit int) ([]
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*AuditEntry
+	out := make([]*AuditEntry, 0)
 	for rows.Next() {
 		e := &AuditEntry{}
 		if err := rows.Scan(&e.ID, &e.TokenID, &e.TokenName, &e.Method, &e.Path, &e.Status, &e.CreatedAt); err != nil {

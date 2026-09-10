@@ -6,13 +6,13 @@ import (
 
 // TaskStats summarizes task counts by status.
 type TaskStats struct {
-	Queued    int
-	Running   int
-	Succeeded int
-	Failed    int
-	Canceled  int
-	Retried   int // tasks with attempts > 1 among all tasks
-	Total     int
+	Queued    int `json:"queued"`
+	Running   int `json:"running"`
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+	Canceled  int `json:"canceled"`
+	Retried   int `json:"retried"` // tasks with attempts > 1 among all tasks
+	Total     int `json:"total"`
 }
 
 // TokenUsage groups task counts by the owning token (via audit joins) and is
@@ -77,7 +77,7 @@ func (s *sqlStore) TokenUsageByAudit(ctx context.Context, limit int) ([]*TokenUs
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*TokenUsage
+	out := make([]*TokenUsage, 0)
 	for rows.Next() {
 		u := &TokenUsage{}
 		if err := rows.Scan(&u.TokenID, &u.TokenName, &u.Calls); err != nil {

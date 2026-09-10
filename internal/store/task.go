@@ -18,20 +18,20 @@ const (
 
 // Task is an asynchronous orchestration job submitted by a client.
 type Task struct {
-	ID          string
-	SessionID   string // target OpenCode session id ("" = new session)
-	Directory   string // working directory hint for new sessions
-	Prompt      string
-	Status      string
-	Error       string
-	Result      string
-	Progress    string
-	Attempts    int
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	StartedAt   *time.Time
-	FinishedAt  *time.Time
-	AvailableAt time.Time // earliest time this task may be claimed (retry backoff)
+	ID          string     `json:"id"`
+	SessionID   string     `json:"sessionId"` // target OpenCode session id ("" = new session)
+	Directory   string     `json:"directory"` // working directory hint for new sessions
+	Prompt      string     `json:"prompt"`
+	Status      string     `json:"status"`
+	Error       string     `json:"error"`
+	Result      string     `json:"result"`
+	Progress    string     `json:"progress"`
+	Attempts    int        `json:"attempts"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+	StartedAt   *time.Time `json:"startedAt"`
+	FinishedAt  *time.Time `json:"finishedAt"`
+	AvailableAt time.Time  `json:"availableAt"` // earliest time this task may be claimed (retry backoff)
 }
 
 // CreateTask persists a queued task.
@@ -184,7 +184,7 @@ func scanTask(row rowScanner) (*Task, error) {
 }
 
 func scanTasks(rows *sql.Rows) ([]*Task, error) {
-	var out []*Task
+	out := make([]*Task, 0)
 	for rows.Next() {
 		t, err := scanTask(rows)
 		if err != nil {

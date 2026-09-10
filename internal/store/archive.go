@@ -9,13 +9,13 @@ import (
 
 // Archive is a stored snapshot of a remote OpenCode session.
 type Archive struct {
-	ID         string
-	SessionID  string
-	Title      string
-	Format     string // "markdown" | "json"
-	Content    string
-	Size       int
-	CreatedAt  time.Time
+	ID        string    `json:"id"`
+	SessionID string    `json:"sessionId"`
+	Title     string    `json:"title"`
+	Format    string    `json:"format"` // "markdown" | "json"
+	Content   string    `json:"content"`
+	Size      int       `json:"size"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // CreateArchive persists an archive snapshot.
@@ -39,7 +39,7 @@ func (s *sqlStore) ListArchives(ctx context.Context, limit int) ([]*Archive, err
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*Archive
+	out := make([]*Archive, 0)
 	for rows.Next() {
 		a := &Archive{}
 		if err := rows.Scan(&a.ID, &a.SessionID, &a.Title, &a.Format, &a.Content, &a.Size, &a.CreatedAt); err != nil {

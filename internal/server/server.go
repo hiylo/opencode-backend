@@ -60,6 +60,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tokens", s.handleTokens)
 	mux.HandleFunc("/api/tokens/", s.handleTokenByID)
 	mux.HandleFunc("/api/ws", s.handleWebSocket)
+	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/projects/", s.handleProjectSessions)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
@@ -165,6 +166,13 @@ func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
 	}
 	return h.Hijack()
+}
+
+// Flush lets SSE streaming work through the logging wrapper.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // registerWebSession issues a signed session id for the web UI after password login.

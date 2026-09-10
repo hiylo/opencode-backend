@@ -159,6 +159,24 @@
 | `task.event` | `{id,status}` | 任务状态变更 | running/succeeded=info, retrying=warning, failed=critical |
 | `upstream.health` | `{healthy,time}` | 本机 OpenCode 可达性心跳（30s） | info |
 
+## 流式对话（SSE 中继）
+
+### GET /api/stream（需 Token，Authorization: Bearer）
+把上游 OpenCode 的**全局 SSE 事件流**（`/global/event`）原样中继给客户端。APP 通过它维持单一稳定连接即可实时收到对话流式输出，无需直连 OpenCode。
+
+响应 `Content-Type: text/event-stream`，先发握手再逐事件转发：
+```
+event: connected
+data: {}
+
+data: {"directory":"/workspaces/opencode","payload":{"id":"evt_...","type":"message.part.delta","properties":{...}}}
+data: {"payload":{"type":"message.part.updated","properties":{...}}}
+```
+
+- 上游断连时后端**自动重连**（指数退避，客户端无需感知）
+- 事件逐条 `data:` 原样透传，字段结构与直连一致
+- 主要事件类型：`server.connected`、`message.part.delta`、`message.part.updated`、`session.*`、`turn.completed`
+
 ## 错误码汇总
 
 | 状态码 | 含义 |

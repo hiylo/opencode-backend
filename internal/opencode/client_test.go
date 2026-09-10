@@ -130,3 +130,70 @@ func TestExportMarkdown(t *testing.T) {
 		t.Fatalf("empty user message not skipped: %s", out)
 	}
 }
+
+func TestStreamEventsParsesSSE(t *testing.T) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/global/event" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: {\"type\":\"a\"}\n\n"))
+		fl.Flush()
+		_, _ = w.Write([]byte("data: {\"type\":\"b\"}\n\n"))
+		fl.Flush()
+	})
+	c := New(srv.URL)
+
+	var events []string
+	ctx := context.Background()
+	err := c.StreamEvents(ctx, func(ev SSEEvent) error {
+		events = append(events, string(ev.Data))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d: %v", len(events), events)
+	}
+	if events[0] != `{"type":"a"}` || events[1] != `{"type":"b"}` {
+		t.Fatalf("unexpected payloads: %v", events)
+	}
+}
+
+func TestStreamEventsMultiLineData(t *testing.T) {
+	// An SSE event whose data spans multiple "data:" lines should be
+	// concatenated and emitted once at the blank-line boundary.
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: {\"type\":\n"))
+		_, _ = w.Write([]byte("data: \"multi\"}\n\n"))
+		fl.Flush()
+	})
+	c := New(srv.URL)
+
+	var events []string
+	ctx := context.Background()
+	_ = c.StreamEvents(ctx, func(ev SSEEvent) error {
+		events = append(events, string(ev.Data))
+		return nil
+	})
+	if len(events) != 1 {
+		t.Fatalf("expected 1 concatenated event, got %d", len(events))
+	}
+	if events[0] != `{"type":"multi"}` {
+		t.Fatalf("bad payload: %q", events[0])
+	}
+}
+
+func TestStreamEventsNon200(t *testing.T) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "denied", http.StatusUnauthorized)
+	})
+	c := New(srv.URL)
+	if err := c.StreamEvents(context.Background(), func(SSEEvent) error { return nil }); err == nil {
+		t.Fatalf("expected error for non-200")
+	}
+}

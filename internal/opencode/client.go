@@ -1,8 +1,11 @@
 package opencode
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -108,31 +111,26 @@ func (c *Client) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 	return out, nil
 }
 
-// Config is the response of GET /config (server config, not the per-project one).
-type Config struct {
-	Version string `json:"version,omitempty"`
-}
-
-// GetVersion fetches the OpenCode server version string.
+// GetVersion fetches the OpenCode server version string from /global/health.
 func (c *Client) GetVersion(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/config", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/global/health", nil)
 	if err != nil {
 		return "", err
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("opencode config: %w", err)
+		return "", fmt.Errorf("opencode health: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("opencode config returned %s", resp.Status)
+		return "", fmt.Errorf("opencode health returned %s", resp.Status)
 	}
-	var cfg Config
-	if err := json.Unmarshal(body, &cfg); err != nil {
-		return "", fmt.Errorf("opencode config: parse: %w", err)
+	var h Health
+	if err := json.Unmarshal(body, &h); err != nil {
+		return "", fmt.Errorf("opencode health: parse: %w", err)
 	}
-	return cfg.Version, nil
+	return h.Version, nil
 }
 
 // BaseURL returns the configured OpenCode base URL.
@@ -213,4 +211,74 @@ func ExportMarkdown(sessionID string, msgs []Message) string {
 		sb.WriteString("\n\n")
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+// SSEEvent is a single raw event from the OpenCode global event stream.
+// The backend relays these verbatim; clients parse the payload themselves.
+type SSEEvent struct {
+	// Data is the raw SSE "data:" line (JSON) as emitted by the upstream.
+	Data []byte
+}
+
+// StreamEvents opens the global SSE event stream and calls onEvent for each
+// "data:" line received. It blocks until the stream ends or ctx is canceled.
+// The upstream URL is GET /global/event with Accept: text/event-stream.
+func (c *Client) StreamEvents(ctx context.Context, onEvent func(SSEEvent) error) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/global/event", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+
+	// Long-lived connection: no overall timeout, rely on ctx + heartbeats.
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("open event stream: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
+		return fmt.Errorf("open event stream: %s: %s", resp.Status, string(raw))
+	}
+
+	// SSE framing: read lines, accumulate "data:" payloads, emit on blank line.
+	var buf []byte
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, rerr := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			trimmed := trimCRLF(line)
+			if len(trimmed) > 0 && trimmed[0] == 'd' && bytes.HasPrefix(trimmed, []byte("data:")) {
+				payload := bytes.TrimSpace(trimmed[len("data:"):])
+				buf = append(buf, payload...)
+				continue
+			}
+			// blank line = event boundary
+			if len(trimmed) == 0 && len(buf) > 0 {
+				if err := onEvent(SSEEvent{Data: append([]byte(nil), buf...)}); err != nil {
+					return err
+				}
+				buf = buf[:0]
+			}
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				// flush trailing event if any
+				if len(buf) > 0 {
+					if err := onEvent(SSEEvent{Data: append([]byte(nil), buf...)}); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			return rerr
+		}
+	}
+}
+
+func trimCRLF(b []byte) []byte {
+	b = bytes.TrimSuffix(b, []byte("\n"))
+	b = bytes.TrimSuffix(b, []byte("\r"))
+	return b
 }

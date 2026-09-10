@@ -38,7 +38,7 @@ func newTestServer(t *testing.T) *Server {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/global/health":
-			_, _ = w.Write([]byte(`{"healthy":true}`))
+			_, _ = w.Write([]byte(`{"healthy":true,"version":"v9.9.9"}`))
 		case "/session/status":
 			_, _ = w.Write([]byte(`{"ses_a":{"type":"busy"}}`))
 		case "/config":
@@ -618,5 +618,109 @@ func TestStatsEndpoint(t *testing.T) {
 	rec = s.do(t, http.MethodGet, "/api/stats", "", nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 without session, got %d", rec.Code)
+	}
+}
+
+func TestStreamRelayRequiresToken(t *testing.T) {
+	s := newTestServer(t)
+	rec := s.do(t, http.MethodGet, "/api/stream", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", rec.Code)
+	}
+}
+
+func TestStreamRelaysEvents(t *testing.T) {
+	// Build a server whose upstream /global/event emits two events then ends.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/global/event" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fl, _ := w.(http.Flusher)
+			_, _ = w.Write([]byte("data: {\"type\":\"a\"}\n\n"))
+			fl.Flush()
+			_, _ = w.Write([]byte("data: {\"type\":\"b\"}\n\n"))
+			fl.Flush()
+			return
+		}
+		// health/config for bootstrapping
+		switch r.URL.Path {
+		case "/global/health":
+			_, _ = w.Write([]byte(`{"healthy":true}`))
+		case "/session/status":
+			_, _ = w.Write([]byte(`{}`))
+		case "/config":
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	dsn := store.SQLiteDSN(filepath.Join(t.TempDir(), "test.db"))
+	st, err := store.OpenFromConfig(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	am := auth.NewManager(st)
+	if _, err := am.Initialize(context.Background(), "admin"); err != nil {
+		t.Fatalf("init auth: %v", err)
+	}
+	cfg := &config.Config{ListenAddr: "127.0.0.1:0", OpenCodeURL: upstream.URL, DBDriver: "sqlite"}
+	hub := push.NewHub()
+	go hub.Run()
+	srv := New(cfg, st, am, opencode.New(upstream.URL), hub)
+
+	// Host the backend on a real server so the stream can flush.
+	srv.testMux = srv.routesMux()
+	backend := httptest.NewServer(srv.testMux)
+	t.Cleanup(backend.Close)
+
+	// Login, create token.
+	rec := srv.do(t, http.MethodPost, "/api/web/session", `{"password":"admin"}`, nil)
+	var login struct {
+		Session string `json:"session"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &login)
+	wh := map[string]string{"X-Web-Session": login.Session}
+	rec = srv.do(t, http.MethodPost, "/api/tokens", `{"name":"streamer"}`, wh)
+	var tok struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &tok)
+
+	// Request the stream over HTTP and read the relayed events.
+	req, _ := http.NewRequest(http.MethodGet, backend.URL+"/api/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+tok.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status %d", resp.StatusCode)
+	}
+
+	// Read the first chunk which should contain connected preamble + events.
+	deadline := time.Now().Add(5 * time.Second)
+	body := ""
+	for time.Now().Before(deadline) {
+		buf := make([]byte, 512)
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			body += string(buf[:n])
+		}
+		if strings.Contains(body, `"type":"b"`) {
+			break
+		}
+		if rerr != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(body, `"type":"a"`) || !strings.Contains(body, `"type":"b"`) {
+		t.Fatalf("relayed body missing events: %q", body)
+	}
+	if !strings.Contains(body, "event: connected") {
+		t.Fatalf("missing connected preamble: %q", body)
 	}
 }

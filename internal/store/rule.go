@@ -16,15 +16,15 @@ const (
 
 // Rule is a user-defined automation rule: when a trigger fires, run a prompt.
 type Rule struct {
-	ID          string
-	Name        string
-	Kind        string // TriggerCron | TriggerGit | TriggerHTTP
-	Schedule    string // cron expression (kind=cron) or repo path (kind=git) or path (kind=http)
-	Directory   string // working directory for the generated task
-	Prompt      string // prompt template sent to the agent
-	Enabled     bool
-	LastFiredAt *time.Time
-	CreatedAt   time.Time
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Kind        string     `json:"kind"`     // TriggerCron | TriggerGit | TriggerHTTP
+	Schedule    string     `json:"schedule"` // cron expression (kind=cron) or repo path (kind=git) or path (kind=http)
+	Directory   string     `json:"directory"` // working directory for the generated task
+	Prompt      string     `json:"prompt"`   // prompt template sent to the agent
+	Enabled     bool       `json:"enabled"`
+	LastFiredAt *time.Time `json:"lastFiredAt"`
+	CreatedAt   time.Time  `json:"createdAt"`
 }
 
 // CreateRule persists a new rule.
@@ -45,7 +45,7 @@ func (s *sqlStore) ListRules(ctx context.Context) ([]*Rule, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*Rule
+	out := make([]*Rule, 0)
 	for rows.Next() {
 		r := &Rule{}
 		var last *time.Time

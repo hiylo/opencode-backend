@@ -187,7 +187,11 @@ async function loadTokens() {
 }
 
 async function doCreateToken() {
-  const name = document.getElementById("tokenName").value;
+  const name = document.getElementById("tokenName").value.trim();
+  if (!name) {
+    show(document.getElementById("tokenMsg"), "请填写设备名称");
+    return;
+  }
   const res = await fetch("/api/tokens", { method: "POST", headers: hdr(), body: JSON.stringify({ name }) });
   const data = await res.json();
   if (!res.ok) { show(document.getElementById("tokenMsg"), data.error || "生成失败"); return; }

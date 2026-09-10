@@ -15,19 +15,19 @@ var (
 
 // Setting is a single configuration key/value persisted in the store.
 type Setting struct {
-	Key       string
-	Value     string
-	UpdatedAt time.Time
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Token represents an API token issued to a client device.
 type Token struct {
-	ID        string
-	Name      string
-	TokenHash string // sha256 hex of the raw token; the raw token is never stored.
-	CreatedAt time.Time
-	RevokedAt *time.Time
-	LastUsed  *time.Time
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	TokenHash string     `json:"-"` // sha256 hex; never serialized to clients
+	CreatedAt time.Time  `json:"createdAt"`
+	RevokedAt *time.Time `json:"revokedAt"`
+	LastUsed  *time.Time `json:"lastUsed"`
 }
 
 // Store is the persistence abstraction shared by the app.
@@ -210,7 +210,7 @@ func (s *sqlStore) ListTokens(ctx context.Context) ([]*Token, error) {
 	}
 	defer rows.Close()
 
-	var out []*Token
+	out := make([]*Token, 0)
 	for rows.Next() {
 		t := &Token{}
 		var revoked *time.Time

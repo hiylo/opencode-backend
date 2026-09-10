@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hiylo/opencode-backend/internal/push"
@@ -132,6 +133,10 @@ func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := readJSON(r, &req); err != nil {
 			writeErr(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if strings.TrimSpace(req.Name) == "" {
+			writeErr(w, http.StatusBadRequest, "name is required")
 			return
 		}
 		raw, err := s.auth.CreateToken(r.Context(), req.Name)
