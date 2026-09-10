@@ -107,6 +107,15 @@ type Store interface {
 	GetArchive(ctx context.Context, id string) (*Archive, error)
 	// DeleteArchive removes an archive by id.
 	DeleteArchive(ctx context.Context, id string) error
+
+	// ---- Usage statistics ----
+
+	// TaskStats returns aggregate task counters by status.
+	TaskStats(ctx context.Context) (*TaskStats, error)
+	// TokenUsageByAudit aggregates audit calls per token, newest active first.
+	TokenUsageByAudit(ctx context.Context, limit int) ([]*TokenUsage, error)
+	// CountArchives returns the number of stored session archives.
+	CountArchives(ctx context.Context) (int, error)
 }
 
 // Open opens a store for the given driver/dsn. It applies all migrations

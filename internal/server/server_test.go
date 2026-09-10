@@ -568,3 +568,55 @@ func TestArchiveSessionFlow(t *testing.T) {
 		t.Fatalf("expected 404 after delete, got %d", rec.Code)
 	}
 }
+
+func TestStatsEndpoint(t *testing.T) {
+	s := newTestServer(t)
+
+	// Login + token, then make a couple of token calls to seed audit.
+	rec := s.do(t, http.MethodPost, "/api/web/session", `{"password":"admin"}`, nil)
+	var login struct {
+		Session string `json:"session"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &login)
+	wh := map[string]string{"X-Web-Session": login.Session}
+	rec = s.do(t, http.MethodPost, "/api/tokens", `{"name":"stats-phone"}`, wh)
+	var tok struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &tok)
+	th := map[string]string{"Authorization": "Bearer " + tok.Token}
+
+	rec = s.do(t, http.MethodGet, "/api/projects", "", th)
+	rec = s.do(t, http.MethodGet, "/api/projects", "", th)
+
+	// Create a task too.
+	rec = s.do(t, http.MethodPost, "/api/tasks", `{"prompt":"x","directory":"/w"}`, th)
+
+	// Stats.
+	rec = s.do(t, http.MethodGet, "/api/stats", "", wh)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stats status %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Tasks struct {
+			Total int `json:"Total"`
+		} `json:"tasks"`
+		TokenUsage []map[string]any `json:"tokenUsage"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Tasks.Total != 1 {
+		t.Fatalf("expected 1 task, got %d", out.Tasks.Total)
+	}
+	if len(out.TokenUsage) == 0 {
+		t.Fatalf("expected token usage entries")
+	}
+	if out.TokenUsage[0]["calls"].(float64) < 2 {
+		t.Fatalf("expected >=2 calls, got %v", out.TokenUsage[0]["calls"])
+	}
+
+	// Stats requires web session.
+	rec = s.do(t, http.MethodGet, "/api/stats", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without session, got %d", rec.Code)
+	}
+}
