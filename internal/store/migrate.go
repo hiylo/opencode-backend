@@ -9,7 +9,7 @@ import (
 // migrate applies schema migrations to the database.
 // Migration version is tracked in a meta table, so both SQLite and
 // PostgreSQL start from the same version sequence.
-func migrate(ctx context.Context, db *sql.DB) error {
+func migrate(ctx context.Context, driver string, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version INTEGER PRIMARY KEY,
 		applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -28,8 +28,8 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if err := m.apply(ctx, db); err != nil {
 			return fmt.Errorf("migration %d (%s): %w", next, m.name, err)
 		}
-		if _, err := db.ExecContext(ctx,
-			`INSERT INTO schema_migrations (version) VALUES (?)`, next); err != nil {
+		if _, err := db.ExecContext(ctx, rebind(driver,
+			`INSERT INTO schema_migrations (version) VALUES (?)`), next); err != nil {
 			return fmt.Errorf("record migration %d: %w", next, err)
 		}
 		current = next

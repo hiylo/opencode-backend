@@ -7,7 +7,7 @@
 <style>
   :root {
     --bg: #0f1115; --card: #181b21; --border: #262a33; --text: #e6e8ec;
-    --muted: #9aa1ad; --primary: #6366f1; --danger: #ef4444; --ok: #10b981;
+    --muted: #9aa1ad; --primary: #6366f1; --danger: #ef4444; --ok: #10b981; --warn: #f59e0b;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -35,6 +35,12 @@
   .badge { display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
   .badge.active { background: rgba(16,185,129,.15); color: var(--ok); }
   .badge.revoked { background: rgba(239,68,68,.15); color: var(--danger); }
+  .badge.queued, .badge.retrying { background: rgba(245,158,11,.15); color: var(--warn); }
+  .badge.running { background: rgba(99,102,241,.15); color: var(--primary); }
+  .badge.succeeded, .badge.idle { background: rgba(16,185,129,.15); color: var(--ok); }
+  .badge.failed, .badge.busy { background: rgba(239,68,68,.15); color: var(--danger); }
+  .badge.canceled { background: rgba(154,161,173,.2); color: var(--muted); }
+  .clip { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .muted { color: var(--muted); }
   .hidden { display: none; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
@@ -82,6 +88,33 @@
       <tbody></tbody>
     </table>
   </div>
+
+  <div class="card">
+    <h2>任务列表</h2>
+    <div class="row">
+      <input type="text" id="appToken" class="mono" placeholder="APP Token（用于访问任务 / 项目接口）" style="flex:1">
+      <button onclick="loadTasks()">加载任务</button>
+      <button class="ghost" onclick="loadProjects()">加载项目</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:6px">Token 仅保存在浏览器本地（localStorage），不会上传到服务器。</div>
+    <div id="taskMsg" class="msg"></div>
+    <table id="taskTable">
+      <thead><tr><th>ID</th><th>目录</th><th>Prompt</th><th>状态</th><th>进度</th><th>结果 / 错误</th><th>创建时间</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>编排项目</h2>
+    <div class="row">
+      <button onclick="loadProjects()">加载项目</button>
+    </div>
+    <div id="projectMsg" class="msg"></div>
+    <table id="projectTable">
+      <thead><tr><th>会话 ID</th><th>状态</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
 </div>
 
 <script>
@@ -120,6 +153,10 @@ async function loadAdmin() {
   const sys = await res.json();
   document.getElementById("sysInfo").textContent =
     `后端 opencode-backend · 上游 ${sys.opencodeURL} · 版本 ${sys.opencodeVersion || "未知"} · 数据库 ${sys.db}`;
+  const saved = localStorage.getItem(APP_TOKEN_KEY) || "";
+  const tokenInput = document.getElementById("appToken");
+  if (tokenInput) tokenInput.value = saved;
+  if (saved) { loadTasks(); loadProjects(); }
   loadTokens();
 }
 
@@ -170,6 +207,76 @@ async function doRevoke(id) {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+const APP_TOKEN_KEY = "ocb_app_token";
+const TASK_STATUS = {
+  queued: "排队中", running: "执行中", succeeded: "已完成",
+  failed: "失败", retrying: "重试中", canceled: "已取消",
+};
+
+function appTokenFromInput() {
+  const inp = document.getElementById("appToken");
+  if (inp && inp.value) {
+    const v = inp.value.trim();
+    localStorage.setItem(APP_TOKEN_KEY, v);
+    return v;
+  }
+  return localStorage.getItem(APP_TOKEN_KEY) || "";
+}
+
+function appHeaders() {
+  const t = appTokenFromInput();
+  const h = {};
+  if (t) h["Authorization"] = "Bearer " + t;
+  return h;
+}
+
+async function loadTasks() {
+  const t = appTokenFromInput();
+  if (!t) { show(document.getElementById("taskMsg"), "请先填写 APP Token"); return; }
+  const res = await fetch("/api/tasks", { headers: appHeaders() });
+  const data = await res.json();
+  if (!res.ok) { show(document.getElementById("taskMsg"), data.error || "加载任务失败"); return; }
+  const list = data.tasks || [];
+  show(document.getElementById("taskMsg"), `共 ${list.length} 条任务`, true);
+  const tb = document.querySelector("#taskTable tbody");
+  tb.innerHTML = "";
+  for (const task of list) {
+    const tr = document.createElement("tr");
+    const status = task.Status || "queued";
+    const detail = (task.Error || task.Result || "").trim();
+    tr.innerHTML = `
+      <td class="mono">${escapeHtml(task.ID)}</td>
+      <td class="clip" title="${escapeHtml(task.Directory || "")}">${escapeHtml(task.Directory) || "-"}</td>
+      <td class="clip" title="${escapeHtml(task.Prompt)}">${escapeHtml(task.Prompt)}</td>
+      <td><span class="badge ${escapeHtml(status)}">${escapeHtml(TASK_STATUS[status] || status)}</span></td>
+      <td class="clip" title="${escapeHtml(task.Progress || "")}">${escapeHtml(task.Progress) || "-"}</td>
+      <td class="clip" title="${escapeHtml(detail)}">${escapeHtml(detail) || "-"}</td>
+      <td>${new Date(task.CreatedAt).toLocaleString()}</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+async function loadProjects() {
+  const t = appTokenFromInput();
+  if (!t) { show(document.getElementById("projectMsg"), "请先在任务列表处填写 APP Token"); return; }
+  const res = await fetch("/api/projects", { headers: appHeaders() });
+  const data = await res.json();
+  if (!res.ok) { show(document.getElementById("projectMsg"), data.error || "加载项目失败"); return; }
+  const list = data.projects || [];
+  show(document.getElementById("projectMsg"), `共 ${list.length} 个会话`, true);
+  const tb = document.querySelector("#projectTable tbody");
+  tb.innerHTML = "";
+  for (const p of list) {
+    const tr = document.createElement("tr");
+    const cls = p.busy ? "busy" : "idle";
+    const label = p.busy ? "忙碌" : "空闲";
+    tr.innerHTML = `
+      <td class="mono">${escapeHtml(p.id)}</td>
+      <td><span class="badge ${cls}">${label}</span></td>`;
+    tb.appendChild(tr);
+  }
 }
 
 loadAdmin();

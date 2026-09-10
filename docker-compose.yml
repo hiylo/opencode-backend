@@ -1,0 +1,37 @@
+services:
+  opencode-backend:
+    build:
+      context: .
+    container_name: opencode-backend
+    ports:
+      - "8080:8080"
+    volumes:
+      - opencode-data:/data
+    environment:
+      OCB_LISTEN: ":8080"
+      OCB_SQLITE_PATH: "/data/opencode-backend.db"
+    restart: unless-stopped
+
+volumes:
+  opencode-data:
+
+  # ---- PostgreSQL 方案（可选）----
+  # 启用：docker compose --profile postgres up -d
+  # 之后在 opencode-backend 中设置环境变量切换数据库：
+  #   OCB_DB=pg
+  #   OCB_PG_DSN: "postgres://opencode:opencode@postgres:5432/opencode?sslmode=disable"
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: opencode-postgres
+  #   environment:
+  #     POSTGRES_DB: opencode
+  #     POSTGRES_USER: opencode
+  #     POSTGRES_PASSWORD: opencode
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   restart: unless-stopped
+  #   profiles: ["postgres"]
+
+  # postgres-data:

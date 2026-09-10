@@ -36,9 +36,9 @@ type Task struct {
 
 // CreateTask persists a queued task.
 func (s *sqlStore) CreateTask(ctx context.Context, t *Task) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.db.ExecContext(ctx, s.q(`
 		INSERT INTO tasks (id, session_id, directory, prompt, status, error, result, progress, attempts, created_at, updated_at, available_at)
-		VALUES (?, ?, ?, ?, ?, '', '', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		VALUES (?, ?, ?, ?, ?, '', '', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`),
 		t.ID, t.SessionID, t.Directory, t.Prompt, TaskQueued,
 	)
 	return err
@@ -57,7 +57,7 @@ func (s *sqlStore) ListTasks(ctx context.Context, status string, limit int) ([]*
 		query += ` LIMIT ?`
 		args = append(args, limit)
 	}
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, s.q(query), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -67,9 +67,9 @@ func (s *sqlStore) ListTasks(ctx context.Context, status string, limit int) ([]*
 
 // GetTask loads a single task.
 func (s *sqlStore) GetTask(ctx context.Context, id string) (*Task, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, s.q(`
 		SELECT id, session_id, directory, prompt, status, error, result, progress, attempts, created_at, updated_at, started_at, finished_at, available_at
-		FROM tasks WHERE id = ?`, id)
+		FROM tasks WHERE id = ?`), id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -81,12 +81,12 @@ func (s *sqlStore) GetTask(ctx context.Context, id string) (*Task, error) {
 // Each claim increments attempts, so retried tasks report their true run count.
 func (s *sqlStore) ClaimNextTask(ctx context.Context) (*Task, error) {
 	// Single statement keeps it atomic enough for a single-node backend.
-	row := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, s.q(`
 		UPDATE tasks SET status = ?, attempts = attempts + 1, started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE id = (
 			SELECT id FROM tasks WHERE status = ? AND available_at <= CURRENT_TIMESTAMP ORDER BY created_at ASC LIMIT 1
 		)
-		RETURNING id, session_id, directory, prompt, status, error, result, progress, attempts, created_at, updated_at, started_at, finished_at, available_at`,
+		RETURNING id, session_id, directory, prompt, status, error, result, progress, attempts, created_at, updated_at, started_at, finished_at, available_at`),
 		TaskRunning, TaskQueued)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -98,30 +98,30 @@ func (s *sqlStore) ClaimNextTask(ctx context.Context) (*Task, error) {
 // UpdateTaskProgress records a progress note for a running task.
 func (s *sqlStore) UpdateTaskProgress(ctx context.Context, id, progress string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE tasks SET progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, progress, id)
+		s.q(`UPDATE tasks SET progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), progress, id)
 	return err
 }
 
 // SetTaskSession records the resolved session id for a task.
 func (s *sqlStore) SetTaskSession(ctx context.Context, id, sessionID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE tasks SET session_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, sessionID, id)
+		s.q(`UPDATE tasks SET session_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), sessionID, id)
 	return err
 }
 
 // CompleteTask marks a task as succeeded with a result.
 func (s *sqlStore) CompleteTask(ctx context.Context, id, result string) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.db.ExecContext(ctx, s.q(`
 		UPDATE tasks SET status = ?, result = ?, finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?`, TaskSucceeded, result, id)
+		WHERE id = ?`), TaskSucceeded, result, id)
 	return err
 }
 
 // FailTask marks a task as failed.
 func (s *sqlStore) FailTask(ctx context.Context, id, errMsg string) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.db.ExecContext(ctx, s.q(`
 		UPDATE tasks SET status = ?, error = ?, finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?`, TaskFailed, errMsg, id)
+		WHERE id = ?`), TaskFailed, errMsg, id)
 	return err
 }
 
@@ -142,7 +142,7 @@ func (s *sqlStore) RetryTask(ctx context.Context, id string, backoffSecs int) er
 				available_at = datetime('now', '+' || ? || ' seconds'), updated_at = CURRENT_TIMESTAMP
 			WHERE id = ? AND status = ?`
 	}
-	res, err := s.db.ExecContext(ctx, query, TaskQueued, backoffSecs, id, TaskFailed)
+	res, err := s.db.ExecContext(ctx, s.q(query), TaskQueued, backoffSecs, id, TaskFailed)
 	if err != nil {
 		return err
 	}
@@ -155,9 +155,9 @@ func (s *sqlStore) RetryTask(ctx context.Context, id string, backoffSecs int) er
 
 // CancelTask marks a queued/running task as canceled.
 func (s *sqlStore) CancelTask(ctx context.Context, id string) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, s.q(`
 		UPDATE tasks SET status = ?, finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND status IN (?, ?)`,
+		WHERE id = ? AND status IN (?, ?)`),
 		TaskCanceled, id, TaskQueued, TaskRunning)
 	if err != nil {
 		return false, err

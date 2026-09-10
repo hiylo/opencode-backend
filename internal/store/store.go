@@ -95,7 +95,7 @@ func Open(ctx context.Context, driver, dsn string) (Store, error) {
 		db.Close()
 		return nil, err
 	}
-	if err := migrate(ctx, db); err != nil {
+	if err := migrate(ctx, driver, db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -107,6 +107,9 @@ type sqlStore struct {
 	driver string
 }
 
+// q rewrites a SQLite-style query into the driver's placeholder syntax.
+func (s *sqlStore) q(query string) string { return rebind(s.driver, query) }
+
 func (s *sqlStore) Close() error { return s.db.Close() }
 
 func (s *sqlStore) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
@@ -114,7 +117,7 @@ func (s *sqlStore) Ping(ctx context.Context) error { return s.db.PingContext(ctx
 func (s *sqlStore) GetSetting(ctx context.Context, key string) (string, error) {
 	var val string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT value FROM settings WHERE key = ?`,
+		s.q(`SELECT value FROM settings WHERE key = ?`),
 		key,
 	).Scan(&val)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -124,18 +127,18 @@ func (s *sqlStore) GetSetting(ctx context.Context, key string) (string, error) {
 }
 
 func (s *sqlStore) SetSetting(ctx context.Context, key, value string) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.db.ExecContext(ctx, s.q(`
 		INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`),
 		key, value,
 	)
 	return err
 }
 
 func (s *sqlStore) CreateToken(ctx context.Context, t *Token) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.db.ExecContext(ctx, s.q(`
 		INSERT INTO tokens (id, name, token_hash, created_at, revoked_at, last_used)
-		VALUES (?, ?, ?, CURRENT_TIMESTAMP, NULL, NULL)`,
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP, NULL, NULL)`),
 		t.ID, t.Name, t.TokenHash,
 	)
 	return err
@@ -145,9 +148,9 @@ func (s *sqlStore) GetTokenByHash(ctx context.Context, hash string) (*Token, err
 	t := &Token{}
 	var revoked *time.Time
 	var lastUsed *time.Time
-	err := s.db.QueryRowContext(ctx, `
+	err := s.db.QueryRowContext(ctx, s.q(`
 		SELECT id, name, token_hash, created_at, revoked_at, last_used
-		FROM tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
+		FROM tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`),
 		hash,
 	).Scan(&t.ID, &t.Name, &t.TokenHash, &t.CreatedAt, &revoked, &lastUsed)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -159,9 +162,9 @@ func (s *sqlStore) GetTokenByHash(ctx context.Context, hash string) (*Token, err
 }
 
 func (s *sqlStore) ListTokens(ctx context.Context) ([]*Token, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, s.q(`
 		SELECT id, name, token_hash, created_at, revoked_at, last_used
-		FROM tokens ORDER BY created_at DESC`)
+		FROM tokens ORDER BY created_at DESC`))
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +187,7 @@ func (s *sqlStore) ListTokens(ctx context.Context) ([]*Token, error) {
 
 func (s *sqlStore) RevokeToken(ctx context.Context, id string) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND revoked_at IS NULL`,
+		s.q(`UPDATE tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND revoked_at IS NULL`),
 		id,
 	)
 	if err != nil {
@@ -202,7 +205,7 @@ func (s *sqlStore) RevokeToken(ctx context.Context, id string) error {
 
 func (s *sqlStore) TouchToken(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE tokens SET last_used = CURRENT_TIMESTAMP WHERE id = ?`,
+		s.q(`UPDATE tokens SET last_used = CURRENT_TIMESTAMP WHERE id = ?`),
 		id,
 	)
 	return err
