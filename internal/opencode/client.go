@@ -63,49 +63,104 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// SessionInfo mirrors the fields used from GET /session/status.
+// SessionInfo is a single OpenCode session with rich metadata plus a live
+// busy flag, used by the console's session/project view.
 type SessionInfo struct {
 	ID        string `json:"id"`
+	Slug      string `json:"slug,omitempty"`
 	Title     string `json:"title,omitempty"`
 	Directory string `json:"directory,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Agent     string `json:"agent,omitempty"`
 	Model     string `json:"model,omitempty"`
 	Busy      bool   `json:"busy"`
+	// Token/usage summary.
+	InputTokens    int `json:"inputTokens"`
+	OutputTokens   int `json:"outputTokens"`
+	ReasoningTokens int `json:"reasoningTokens"`
+	Cost           int `json:"cost"`
+	CreatedMs      int64 `json:"createdMs"`
+	UpdatedMs      int64 `json:"updatedMs"`
 }
 
-// ListSessions returns the set of currently known sessions by querying
-// the session status endpoint and collapsing by directory, so a server
-// watching several workspaces appears once with its session count.
+// ListSessions returns the OpenCode sessions with metadata from GET /session,
+// merged with live busy state from GET /session/status.
 func (c *Client) ListSessions(ctx context.Context) ([]SessionInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/session/status", nil)
+	// Fetch session metadata list.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/session", nil)
 	if err != nil {
 		return nil, err
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("opencode session status: %w", err)
+		return nil, fmt.Errorf("opencode sessions: %w", err)
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("opencode session status returned %s", resp.Status)
+		return nil, fmt.Errorf("opencode sessions returned %s", resp.Status)
 	}
 
-	type rawStatus struct {
-		Type string `json:"type"`
+	type rawSession struct {
+		ID        string `json:"id"`
+		Slug      string `json:"slug"`
+		Title     string `json:"title"`
+		Directory string `json:"directory"`
+		Path      string `json:"path"`
+		Agent     string `json:"agent"`
+		Model     struct {
+			ID string `json:"id"`
+		} `json:"model"`
+		Cost   int `json:"cost"`
+		Tokens struct {
+			Input     int `json:"input"`
+			Output    int `json:"output"`
+			Reasoning int `json:"reasoning"`
+		} `json:"tokens"`
+		Time struct {
+			Created int64 `json:"created"`
+			Updated int64 `json:"updated"`
+		} `json:"time"`
 	}
-	var raw map[string]rawStatus
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("opencode session status: parse: %w", err)
+	var raws []rawSession
+	if err := json.Unmarshal(body, &raws); err != nil {
+		return nil, fmt.Errorf("opencode sessions: parse: %w", err)
 	}
 
-	// Collapse sessions by count only: the status endpoint keys by session id
-	// and reports a type (busy/idle), without per-session directory info.
-	// We return one entry per session id, flattening type to Busy.
-	out := make([]SessionInfo, 0, len(raw))
-	for id, st := range raw {
+	// Fetch busy states.
+	busy := map[string]bool{}
+	if sreq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/session/status", nil); err == nil {
+		if sresp, err := c.httpClient.Do(sreq); err == nil {
+			sbody, _ := io.ReadAll(io.LimitReader(sresp.Body, 4*1024*1024))
+			sresp.Body.Close()
+			var statuses map[string]struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(sbody, &statuses) == nil {
+				for id, st := range statuses {
+					busy[id] = st.Type == "busy"
+				}
+			}
+		}
+	}
+
+	out := make([]SessionInfo, 0, len(raws))
+	for _, r := range raws {
 		out = append(out, SessionInfo{
-			ID:   id,
-			Busy: st.Type == "busy",
+			ID:              r.ID,
+			Slug:            r.Slug,
+			Title:           r.Title,
+			Directory:       r.Directory,
+			Path:            r.Path,
+			Agent:           r.Agent,
+			Model:           r.Model.ID,
+			Busy:            busy[r.ID],
+			InputTokens:     r.Tokens.Input,
+			OutputTokens:    r.Tokens.Output,
+			ReasoningTokens: r.Tokens.Reasoning,
+			Cost:            r.Cost,
+			CreatedMs:       r.Time.Created,
+			UpdatedMs:       r.Time.Updated,
 		})
 	}
 	return out, nil

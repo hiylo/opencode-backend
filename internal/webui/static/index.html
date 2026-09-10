@@ -179,7 +179,7 @@
         <h2>本机 OpenCode 会话</h2>
         <div class="row"><button class="ghost" onclick="loadProjects()">刷新</button></div>
         <div id="projectMsg" class="msg"></div>
-        <table id="projectTable"><thead><tr><th>会话 ID</th><th>状态</th></tr></thead><tbody></tbody></table>
+        <table id="projectTable"><thead><tr><th>标题</th><th>目录</th><th>模型</th><th>Agent</th><th>Token(输入/输出)</th><th>状态</th><th>更新时间</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
 
@@ -459,11 +459,24 @@ async function loadProjects() {
   tb.innerHTML = "";
   for (const p of list) {
     const cls = p.busy ? "busy" : "idle";
+    const label = p.busy ? "忙碌" : "空闲";
+    const tokens = p.inputTokens != null ? `${fmtNum(p.inputTokens)} / ${fmtNum(p.outputTokens)}` : "-";
     tb.insertAdjacentHTML("beforeend", `<tr>
-      <td class="mono">${escapeHtml(p.id)}</td>
-      <td><span class="badge ${cls}">${p.busy ? "忙碌" : "空闲"}</span></td>
+      <td title="${escapeHtml(p.id)}">${escapeHtml(p.title || p.slug || p.id)}</td>
+      <td class="clip" title="${escapeHtml(p.directory)}">${escapeHtml(p.directory) || "-"}</td>
+      <td class="clip">${escapeHtml(p.model) || "-"}</td>
+      <td>${escapeHtml(p.agent) || "-"}</td>
+      <td class="mono">${tokens}</td>
+      <td><span class="badge ${cls}">${label}</span></td>
+      <td>${p.updatedMs ? new Date(p.updatedMs).toLocaleString() : "-"}</td>
     </tr>`);
   }
+}
+function fmtNum(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return String(n);
 }
 
 /* ---------- 规则 ---------- */

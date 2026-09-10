@@ -39,6 +39,8 @@ func newTestServer(t *testing.T) *Server {
 		switch r.URL.Path {
 		case "/global/health":
 			_, _ = w.Write([]byte(`{"healthy":true,"version":"v9.9.9"}`))
+		case "/session":
+			_, _ = w.Write([]byte(`[{"id":"ses_a","slug":"alpha","title":"Alpha","directory":"/w","agent":"build","model":{"id":"m1"},"cost":0,"tokens":{"input":1,"output":1,"reasoning":1},"time":{"created":1000,"updated":2000}}]`))
 		case "/session/status":
 			_, _ = w.Write([]byte(`{"ses_a":{"type":"busy"}}`))
 		case "/config":

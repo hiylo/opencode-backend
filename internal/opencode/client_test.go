@@ -48,17 +48,35 @@ func TestPingNon200(t *testing.T) {
 	}
 }
 
-func TestListSessionsObjectMap(t *testing.T) {
-	// /session/status returns an object keyed by session id.
+func TestListSessionsRichMetadata(t *testing.T) {
+	// /session returns a list of rich session objects; /session/status
+	// returns busy flags keyed by id.
 	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/session/status" {
-			t.Errorf("unexpected path %s", r.URL.Path)
+		switch r.URL.Path {
+		case "/session":
+			body := []map[string]any{
+				{
+					"id": "ses_a", "slug": "alpha", "title": "Alpha work", "directory": "/w/a",
+					"agent": "build", "model": map[string]any{"id": "m1"},
+					"cost": 5, "tokens": map[string]any{"input": 100, "output": 20, "reasoning": 10},
+					"time": map[string]any{"created": 1000, "updated": 2000},
+				},
+				{
+					"id": "ses_b", "slug": "beta", "title": "Beta work", "directory": "/w/b",
+					"agent": "build", "model": map[string]any{"id": "m2"},
+					"cost": 0, "tokens": map[string]any{"input": 50, "output": 5, "reasoning": 2},
+					"time": map[string]any{"created": 1000, "updated": 2000},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(body)
+		case "/session/status":
+			_ = json.NewEncoder(w).Encode(map[string]map[string]string{
+				"ses_a": {"type": "busy"},
+				"ses_b": {"type": "idle"},
+			})
+		default:
+			http.NotFound(w, r)
 		}
-		body := map[string]map[string]string{
-			"ses_a": {"type": "busy"},
-			"ses_b": {"type": "idle"},
-		}
-		_ = json.NewEncoder(w).Encode(body)
 	})
 	c := New(srv.URL)
 	sessions, err := c.ListSessions(context.Background())
@@ -68,14 +86,24 @@ func TestListSessionsObjectMap(t *testing.T) {
 	if len(sessions) != 2 {
 		t.Fatalf("expected 2 sessions, got %d", len(sessions))
 	}
-	busy := 0
-	for _, s := range sessions {
-		if s.Busy {
-			busy++
+	// Find ses_a and verify rich fields.
+	var a *SessionInfo
+	for i := range sessions {
+		if sessions[i].ID == "ses_a" {
+			a = &sessions[i]
 		}
 	}
-	if busy != 1 {
-		t.Fatalf("expected 1 busy session, got %d", busy)
+	if a == nil {
+		t.Fatalf("ses_a not found")
+	}
+	if a.Title != "Alpha work" || a.Model != "m1" || a.Agent != "build" {
+		t.Fatalf("rich metadata missing: %+v", a)
+	}
+	if !a.Busy {
+		t.Fatalf("ses_a should be busy")
+	}
+	if a.InputTokens != 100 || a.OutputTokens != 20 || a.Cost != 5 {
+		t.Fatalf("usage fields wrong: %+v", a)
 	}
 }
 
