@@ -92,6 +92,56 @@
 ### DELETE /api/tasks/{id}（需 Token）
 取消任务（仅 queued/running）。→ `{"ok":true}`；409 → 已结束
 
+### POST /api/batch（需 Token）
+一条指令对多个 target 批量建任务：
+```json
+{ "prompt":"给所有模块加日志", "targets":[ {"directory":"/a"}, {"sessionId":"ses_..."} ] }
+```
+- 201 → `{"created":["task_..."],"count":2}`
+
+### POST /api/archives（需 Token）
+把远端会话归档到后端存储。请求：`{"sessionId":"...", "format":"markdown"|"json"}`（format 默认 markdown）
+- 201 → `{"id":"arch_...","size":123,"format":"markdown"}`
+
+### GET /api/archives（需 Token）
+归档元数据列表（不含内容），`?limit=`。→ `{"archives":[...]}`
+
+### GET /api/archives/{id}（需 Token）
+完整归档（含 `content`）。
+
+### DELETE /api/archives/{id}（需 Token）
+删除归档。→ `{"ok":true}`；404 → 不存在
+
+## 自动化规则（Web Session）
+
+### GET /api/rules（需 X-Web-Session）
+规则列表。→ `{"rules":[...]}`
+
+### POST /api/rules（需 X-Web-Session）
+```json
+{ "name":"每晚测试", "kind":"cron|git|http", "schedule":"5m 或 cron 或 target", "directory":"/path", "prompt":"指令", "enabled":true }
+```
+- 201 → 完整 Rule 对象（含新生成的 id）
+
+### DELETE /api/rules/{id}（需 X-Web-Session）
+删除规则。→ `{"ok":true}`；404 → 不存在
+
+### POST /api/webhook?target=xxx
+触发匹配的 http 规则（无需鉴权，由调用方如 git webhook 使用）。→ `{"fired":true}`；404 → 无匹配规则
+
+## 审计与统计（Web Session）
+
+### GET /api/audit?tokenId=&limit=（需 X-Web-Session）
+最近审计记录（token 认证的 API 调用）。→ `{"audit":[...]}`
+
+### GET /api/stats（需 X-Web-Session）
+用量统计：
+```json
+{ "tasks":{"queued":0,"running":0,"succeeded":5,"failed":1,"canceled":0,"retried":1,"total":6},
+  "tokenUsage":[{"tokenId":"...","tokenName":"我的手机","calls":12}],
+  "archives":3 }
+```
+
 ## 推送通道（WebSocket）
 
 ### GET /api/ws?token=xxx（需 Token，query 参数）
@@ -99,15 +149,15 @@
 
 事件帧（JSON）：
 ```json
-{ "type":"task.event", "payload":{"id":"task_...","status":"running|succeeded|failed"} }
+{ "type":"task.event", "payload":{"id":"task_...","status":"running|succeeded|failed"}, "severity":"info" }
 { "type":"upstream.health", "payload":{"healthy":true,"time":"..."} }
 ```
 
-| type | payload | 说明 |
-|------|---------|------|
-| `subscribed` | — | 订阅成功 |
-| `task.event` | `{id,status}` | 任务状态变更（running/succeeded/failed） |
-| `upstream.health` | `{healthy,time}` | 本机 OpenCode 可达性心跳（30s） |
+| type | payload | 说明 | severity |
+|------|---------|------|----------|
+| `subscribed` | — | 订阅成功 | info |
+| `task.event` | `{id,status}` | 任务状态变更 | running/succeeded=info, retrying=warning, failed=critical |
+| `upstream.health` | `{healthy,time}` | 本机 OpenCode 可达性心跳（30s） | info |
 
 ## 错误码汇总
 
@@ -121,4 +171,4 @@
 
 ## 状态码表（任务）
 
-`queued` → `running` → `succeeded` / `failed`；`queued`/`running` → `canceled`
+`queued` → `running` → `succeeded` / `failed`；`queued`/`running` → `canceled`；`retrying` = 失败后排队重试（带退避）
